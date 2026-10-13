@@ -1,0 +1,34 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Unit tests open no window and need no GTK; the library is installed so the Linux binary can be checked to load it.
+      - name: GTK 3 (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-0
+      - run: go vet ./...
+      # DOCKERDESK_LIVE is unset, so live_test.go skips itself; no Docker daemon is used.
+      - run: go test ./...
+      - run: go build -o bin/dockerdesk-${{ runner.os }}${{ runner.os == 'Windows' && '.exe' || '' }} .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dockerdesk-${{ runner.os }}
+          path: bin/
+          if-no-files-found: error
