@@ -55,7 +55,8 @@ Engine address: `DOCKER_HOST`, else `/var/run/docker.sock`, else `~/.docker/run/
     make build        # bin/dockerdesk for the host
     make cross        # bin/dockerdesk-{darwin-arm64,darwin-amd64,linux-amd64,windows-amd64.exe}
     make vet test     # vet and unit tests, no engine needed
-    make shots        # window screenshots into docs/img/, needs a daemon with containers; opens a window
+    make shots        # window screenshots into docs/img/, uses the demo engine, opens a window
+    make shots-linux  # Linux shot in the gowt Docker stand (Xvfb), no host Docker access
     make clean
 
     go run . -mem     # also log Go heap statistics to stderr every 10 s
@@ -63,6 +64,9 @@ Engine address: `DOCKER_HOST`, else `/var/run/docker.sock`, else `~/.docker/run/
 
 `make shots` writes `docs/img/dockerdesk-macos-light.png` and `-macos-dark.png` on macOS (it switches the
 system appearance and restores it) and `docs/img/dockerdesk-<os>.png` on Linux and Windows; run it on each OS.
+
+`DOCKERDESK_CHARTS=1` starts with the charts expanded. `DOCKERDESK_DEMO=1` swaps the Docker daemon for a built-in fake one (compose groups, mixed states, moving
+CPU curves, no network); `make shots` sets it so pictures never show real container names.
 
 ## Memory comparison
 

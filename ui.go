@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"runtime"
 	"time"
 
@@ -37,11 +38,13 @@ type lbl struct {
 	last string
 }
 
-func (l *lbl) set(s string) {
-	if s != l.last {
-		l.last = s
-		l.l.SetText(s)
+func (l *lbl) set(s string) bool {
+	if s == l.last {
+		return false
 	}
+	l.last = s
+	l.l.SetText(s)
+	return true
 }
 
 // ui holds the widgets and the state shown in them; everything here belongs to the UI thread.
@@ -128,7 +131,12 @@ func (u *ui) build() {
 	u.buildFooter(root)
 	u.app.OnThemeChange(u.onThemeChange)
 	w.OnClose(func() bool { u.stop(); return true })
-	w.SetSize(1360, 820)
+	// A fixed 1360x820 overflows smaller screens (the 1280x1024 Linux stand), cutting the right edge.
+	wd, ht := 1360, 820
+	if a := w.Unwrap().GetDisplay().GetPrimaryMonitor().GetClientArea(); a.Width > 0 && a.Height > 0 {
+		wd, ht = min(wd, int(a.Width)), min(ht, int(a.Height))
+	}
+	w.SetSize(wd, ht)
 	w.Show()
 }
 
@@ -253,7 +261,7 @@ func (u *ui) buildContainers(p *gowt.Panel) {
 	u.style(&u.only.Unwrap().Control, surfContent, inkText)
 	u.buildTree(p)
 	u.chart = p.Canvas(u.paintChart, gowt.Cell(gowt.GridCell{Align: gowt.AlignFill, GrowX: true, Height: 170}))
-	u.showChart(false)
+	u.showChart(os.Getenv("DOCKERDESK_CHARTS") == "1")
 	u.count = u.label(p, "Showing 0 items", surfContent, inkText, u.fonts.small, alignEnd)
 }
 
@@ -332,9 +340,13 @@ func (u *ui) apply(s snapshot) {
 		return
 	}
 	u.setEngine(engineUp)
-	u.cpuVal.set(fmt.Sprintf("%.2f%% / %d00%%", cpu, u.info.NCPU))
-	u.cpuSub.set(fmt.Sprintf("(%d CPUs available)", u.info.NCPU))
-	u.memVal.set(formatBytes(mem) + " / " + formatBytes(u.info.MemTotal))
+	// SetText does not re-run the layout, so a label sized for "-" would stay clipped on GTK.
+	changed := u.cpuVal.set(fmt.Sprintf("%.2f%% / %d00%%", cpu, u.info.NCPU))
+	changed = u.cpuSub.set(fmt.Sprintf("(%d CPUs available)", u.info.NCPU)) || changed
+	changed = u.memVal.set(formatBytes(mem)+" / "+formatBytes(u.info.MemTotal)) || changed
+	if changed {
+		u.pageViews[pageContainers].Unwrap().LayoutOverload2(true, true)
+	}
 	u.redrawChart()
 	msg := fmt.Sprintf("Containers: RAM %s   CPU %.2f%%", formatBytes(mem), cpu/float64(max(u.info.NCPU, 1)))
 	if u.failure != "" {

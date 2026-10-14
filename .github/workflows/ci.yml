@@ -15,8 +15,8 @@ jobs:
     env:
       CGO_ENABLED: "0"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       # Unit tests open no window and need no GTK; the library is installed so the Linux binary can be checked to load it.
@@ -27,7 +27,7 @@ jobs:
       # DOCKERDESK_LIVE is unset, so live_test.go skips itself; no Docker daemon is used.
       - run: go test ./...
       - run: go build -o bin/dockerdesk-${{ runner.os }}${{ runner.os == 'Windows' && '.exe' || '' }} .
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dockerdesk-${{ runner.os }}
           path: bin/

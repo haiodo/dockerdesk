@@ -50,7 +50,13 @@ func main() {
 func connect(ctx context.Context) (Engine, Info, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	eng, err := newEngine()
+	var eng Engine
+	var err error
+	if os.Getenv("DOCKERDESK_DEMO") == "1" {
+		eng = newDemoEngine()
+	} else {
+		eng, err = newEngine()
+	}
 	if err != nil {
 		return nil, Info{}, err
 	}
