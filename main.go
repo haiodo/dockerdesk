@@ -40,6 +40,14 @@ func main() {
 		u.poll.trace = *mem
 		u.build()
 		u.flushLogs()
+		if os.Getenv("DOCKERDESK_TRACE") == "1" && os.Getenv("DOCKERDESK_DEMO") == "1" {
+			// Opens the first demo container's log without a click, for timing runs.
+			if cs, _ := eng.Containers(ctx); len(cs) > 0 {
+				u.logID = cs[0].ID
+				u.openPage(pageLogs)
+				u.restartLogs()
+			}
+		}
 		go u.poll.Run(ctx, func(s snapshot) { app.Async(func() { u.apply(s) }) })
 	})
 	if err != nil {

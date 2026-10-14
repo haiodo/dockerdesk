@@ -199,14 +199,14 @@ type modifier struct{ f func() }
 func (m *modifier) ModifyText(*swt.ModifyEvent) { m.f() }
 
 func (u *ui) buildFooter(root *gowt.Panel) {
-	f := u.panel(root, surfFooter, gowt.Grid{Columns: 2, Margin: 8, Spacing: 12}, gowt.Cell(gowt.GridCell{Align: gowt.AlignFill, GrowX: true, SpanX: 2}))
+	f := u.panel(root, surfFooter, gowt.Grid{Columns: 2, Margin: gowt.Spacing.SM, Spacing: gowt.Spacing.MD}, gowt.Cell(gowt.GridCell{Align: gowt.AlignFill, GrowX: true, SpanX: 2}))
 	u.footL = u.label(f, "Connecting...", surfFooter, inkText, u.fonts.small, fillX)
 	u.footR = u.label(f, "", surfFooter, inkBlue, u.fonts.small, alignEnd)
 }
 
 func (u *ui) buildPages() {
 	for range 4 {
-		u.pageViews = append(u.pageViews, u.panel(u.pages, surfContent, gowt.Grid{Columns: 1, Margin: 20, Spacing: 12}))
+		u.pageViews = append(u.pageViews, u.panel(u.pages, surfContent, gowt.Grid{Columns: 1, Margin: gowt.Spacing.PageMargin, Spacing: gowt.Spacing.MD}))
 	}
 	u.buildContainers(u.pageViews[pageContainers])
 	u.images = u.newListPage(u.pageViews[pageImages], "Images", []string{"Tags", "ID", "Size", "Created"}, []int{420, 130, 100, 130}, u.imageRows)
@@ -230,10 +230,10 @@ func (u *ui) openPage(i int) {
 func (u *ui) buildContainers(p *gowt.Panel) {
 	u.label(p, "Containers", surfContent, inkText, u.fonts.title)
 	u.buildStats(p)
-	bar := u.panel(p, surfContent, gowt.Row{Spacing: 20, Center: true}, fillX)
+	bar := u.panel(p, surfContent, gowt.Row{Spacing: gowt.Spacing.LG, Center: true}, fillX)
 	u.searchField(bar.AsComposite(), 320)
 	u.only = bar.Button("Only show running containers", func() { u.render() }, gowt.Check())
-	u.style(&u.only.Unwrap().Control, surfContent, inkText)
+	u.style(&u.only.Unwrap().Control, surfNone, inkNone) // native colours: the system theme draws the check box
 	u.buildTree(p)
 	u.chart = p.Canvas(u.paintChart, gowt.Cell(gowt.GridCell{Align: gowt.AlignFill, GrowX: true, Height: 170}))
 	u.showChart(os.Getenv("DOCKERDESK_CHARTS") == "1")
@@ -241,13 +241,14 @@ func (u *ui) buildContainers(p *gowt.Panel) {
 }
 
 func (u *ui) buildStats(p *gowt.Panel) {
-	row := u.panel(p, surfContent, gowt.Grid{Columns: 3, Spacing: 40}, fillX)
-	cpu := u.panel(row, surfContent, gowt.Grid{Columns: 1, Spacing: 4}, fillX)
+	row := u.panel(p, surfContent, gowt.Grid{Columns: 3, Spacing: gowt.Spacing.XL}, fillX)
+	card := gowt.Grid{Columns: 1, Spacing: gowt.Spacing.XS}
+	cpu := u.panel(row, surfContent, card, fillX)
 	u.label(cpu, "Container CPU usage", surfContent, inkText, u.fonts.small)
-	v := u.panel(cpu, surfContent, gowt.Grid{Columns: 2, Spacing: 8})
+	v := u.panel(cpu, surfContent, gowt.Grid{Columns: 2, Spacing: gowt.Spacing.SM})
 	u.cpuVal = u.label(v, "-", surfContent, inkGreen, u.fonts.big)
 	u.cpuSub = u.label(v, "", surfContent, inkMuted, u.fonts.small)
-	mem := u.panel(row, surfContent, gowt.Grid{Columns: 1, Spacing: 4}, fillX)
+	mem := u.panel(row, surfContent, card, fillX)
 	u.label(mem, "Container memory usage", surfContent, inkText, u.fonts.small)
 	u.memVal = u.label(mem, "-", surfContent, inkGreen, u.fonts.big)
 	u.chartLink = row.Link(`<a href="toggle">Show charts</a>`, func(string) { u.showChart(!u.chartShown) }, alignEnd)

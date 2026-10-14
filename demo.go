@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -144,6 +146,14 @@ func (e *demoEngine) Logs(ctx context.Context, id string, tail int, follow bool,
 		"GET /api/cart 200 4ms",
 		"POST /api/orders 201 38ms",
 		"GET /api/products/42 200 7ms",
+	}
+	// DOCKERDESK_DEMO_LOGLINES=N serves N lines of ~200 characters, for measuring the log view.
+	if n, _ := strconv.Atoi(os.Getenv("DOCKERDESK_DEMO_LOGLINES")); n > 0 {
+		lines = lines[:0]
+		pad := strings.Repeat("x", 120)
+		for k := 0; k < n; k++ {
+			lines = append(lines, fmt.Sprintf("GET /api/products/%d?session=%08x 200 %dms ua=Mozilla/5.0 trace=%s", k, k*2654435761, k%90, pad))
+		}
 	}
 	for k, l := range lines {
 		onLine(1, base.Add(time.Duration(k*15)*time.Second).UTC().Format("2006-01-02T15:04:05Z")+" "+l)
