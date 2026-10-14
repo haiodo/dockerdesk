@@ -6,7 +6,7 @@ NAME := dockerdesk
 HOSTOS := $(shell go env GOOS)
 EXT  := $(if $(filter windows,$(HOSTOS)),.exe)
 
-.PHONY: build run test vet cross clean shots shots-macos shots-host shots-linux \
+.PHONY: build run test vet cross dist clean shots shots-macos shots-host shots-linux \
 	build-darwin-arm64 build-darwin-amd64 build-linux-amd64 build-windows-amd64
 
 build:
@@ -22,16 +22,34 @@ test:
 vet:
 	go vet ./...
 
+# Release builds: no local paths, no symbol tables (about a third smaller).
+RELFLAGS := -trimpath -ldflags='-s -w'
+VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
+
 cross: build-darwin-arm64 build-darwin-amd64 build-linux-amd64 build-windows-amd64
 
 build-darwin-arm64:
-	GOOS=darwin GOARCH=arm64 go build -o $(BIN)/$(NAME)-darwin-arm64 .
+	GOOS=darwin GOARCH=arm64 go build $(RELFLAGS) -o $(BIN)/$(NAME)-darwin-arm64 .
 build-darwin-amd64:
-	GOOS=darwin GOARCH=amd64 go build -o $(BIN)/$(NAME)-darwin-amd64 .
+	GOOS=darwin GOARCH=amd64 go build $(RELFLAGS) -o $(BIN)/$(NAME)-darwin-amd64 .
 build-linux-amd64:
-	GOOS=linux GOARCH=amd64 go build -o $(BIN)/$(NAME)-linux-amd64 .
+	GOOS=linux GOARCH=amd64 go build $(RELFLAGS) -o $(BIN)/$(NAME)-linux-amd64 .
 build-windows-amd64:
-	GOOS=windows GOARCH=amd64 go build -o $(BIN)/$(NAME)-windows-amd64.exe .
+	GOOS=windows GOARCH=amd64 go build $(RELFLAGS) -o $(BIN)/$(NAME)-windows-amd64.exe .
+
+# Release archives in $(BIN)/dist. macOS only: a universal dockerdesk.app (lipo, ad-hoc codesign) zipped with ditto;
+# Linux tar.gz keeps the executable bit; Windows zip.
+DIST := $(BIN)/dist
+APP  := $(DIST)/$(NAME).app
+dist: cross
+	@rm -rf $(DIST) && mkdir -p $(APP)/Contents/MacOS
+	lipo -create -output $(APP)/Contents/MacOS/$(NAME) $(BIN)/$(NAME)-darwin-arm64 $(BIN)/$(NAME)-darwin-amd64
+	sed -e 's/@NAME@/$(NAME)/g' -e 's/@VERSION@/$(VERSION:v%=%)/g' Info.plist.in > $(APP)/Contents/Info.plist
+	codesign --force --sign - $(APP)
+	cd $(DIST) && ditto -c -k --norsrc --noextattr --noqtn --keepParent $(NAME).app $(NAME)-$(VERSION)-macos-universal.zip && rm -rf $(NAME).app
+	tar -czf $(DIST)/$(NAME)-$(VERSION)-linux-amd64.tar.gz -C $(BIN) $(NAME)-linux-amd64
+	cd $(BIN) && zip -q dist/$(NAME)-$(VERSION)-windows-amd64.zip $(NAME)-windows-amd64.exe
+	@ls -l $(DIST)
 
 clean:
 	rm -rf $(BIN)

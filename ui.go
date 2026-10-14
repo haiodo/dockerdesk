@@ -77,9 +77,6 @@ type ui struct {
 	chartShown                                  bool
 
 	query              string
-	headerSearch       *swt.Text
-	pageSearch         *swt.Text
-	syncing            bool
 	only               *gowt.Button
 	tree               *gowt.Tree
 	menu               *gowt.Menu
@@ -165,9 +162,9 @@ const (
 )
 
 // buildHeader is the compact blue row that stands in for the title bar on macOS. Every child grabs
-// the vertical space and centres in it, so name and search share the traffic lights' centre line.
+// the vertical space and centres in it, so the name shares the traffic lights' centre line.
 func (u *ui) buildHeader(root *gowt.Panel) {
-	h := u.panel(root, surfHeader, gowt.Grid{Columns: 4}, gowt.Cell(gowt.GridCell{Align: gowt.AlignFill, GrowX: true, SpanX: 2, Height: headerHeight}))
+	h := u.panel(root, surfHeader, gowt.Grid{Columns: 3}, gowt.Cell(gowt.GridCell{Align: gowt.AlignFill, GrowX: true, SpanX: 2, Height: headerHeight}))
 	// TODO(wt/facade02): enable dragging the window by this panel once the facade option is released.
 	left := 0
 	if runtime.GOOS == "darwin" {
@@ -179,49 +176,27 @@ func (u *ui) buildHeader(root *gowt.Panel) {
 	}
 	spacer(left + 4)
 	centered.GrowX = true
-	u.label(h, "dockerdesk", surfHeader, inkWhite, u.fonts.title, gowt.Cell(centered))
-	u.headerSearch = u.searchField(h.AsComposite(), 320, false)
+	u.label(h, "dockerdesk", surfHeader, inkWhite, u.fonts.brand, gowt.Cell(centered))
 	spacer(edgeInset)
 }
 
-// searchField is a native search box (magnifier icon where the OS has one) that edits the shared query.
-func (u *ui) searchField(parent *swt.Composite, width int32, inRow bool) *swt.Text {
+// searchField is a native search box (magnifier icon where the OS has one) that filters the containers.
+func (u *ui) searchField(parent *swt.Composite, width int32) *swt.Text {
 	t := swt.NewText(parent, swt.SEARCH|swt.ICON_SEARCH)
 	t.SetMessage("Search")
-	t.AddModifyListener(&modifier{func() { u.onSearch(t) }})
-	if inRow {
-		rd := swt.NewRowData()
-		rd.Width = width
-		t.SetLayoutData(rd)
-	} else {
-		gd := swt.NewGridData()
-		gd.WidthHint = width
-		gd.VerticalAlignment = swt.CENTER
-		gd.GrabExcessVerticalSpace = true
-		t.SetLayoutData(gd)
-	}
+	t.AddModifyListener(&modifier{func() {
+		u.query = t.GetText()
+		u.render()
+	}})
+	rd := swt.NewRowData()
+	rd.Width = width
+	t.SetLayoutData(rd)
 	return t
 }
 
 type modifier struct{ f func() }
 
 func (m *modifier) ModifyText(*swt.ModifyEvent) { m.f() }
-
-// onSearch mirrors the text into the other search box and filters.
-func (u *ui) onSearch(src *swt.Text) {
-	if u.syncing {
-		return
-	}
-	u.query = src.GetText()
-	u.syncing = true
-	for _, t := range []*swt.Text{u.headerSearch, u.pageSearch} {
-		if t != nil && t != src && t.GetText() != u.query {
-			t.SetText(u.query)
-		}
-	}
-	u.syncing = false
-	u.render()
-}
 
 func (u *ui) buildFooter(root *gowt.Panel) {
 	f := u.panel(root, surfFooter, gowt.Grid{Columns: 2, Margin: 8, Spacing: 12}, gowt.Cell(gowt.GridCell{Align: gowt.AlignFill, GrowX: true, SpanX: 2}))
@@ -256,7 +231,7 @@ func (u *ui) buildContainers(p *gowt.Panel) {
 	u.label(p, "Containers", surfContent, inkText, u.fonts.title)
 	u.buildStats(p)
 	bar := u.panel(p, surfContent, gowt.Row{Spacing: 20, Center: true}, fillX)
-	u.pageSearch = u.searchField(bar.AsComposite(), 320, true)
+	u.searchField(bar.AsComposite(), 320)
 	u.only = bar.Button("Only show running containers", func() { u.render() }, gowt.Check())
 	u.style(&u.only.Unwrap().Control, surfContent, inkText)
 	u.buildTree(p)

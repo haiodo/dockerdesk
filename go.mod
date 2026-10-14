@@ -3,7 +3,7 @@ module github.com/haiodo/dockerdesk
 go 1.27
 
 require (
-	github.com/haiodo/gowt v0.1.0
+	github.com/haiodo/gowt v0.3.0
 	github.com/moby/moby/api v1.56.1
 	github.com/moby/moby/client v0.6.2
 )

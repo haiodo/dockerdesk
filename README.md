@@ -25,7 +25,7 @@ Regenerate with `make shots` (see below).
 - Live CPU chart (last 60 samples) of the total and the selected container, drawn with the facade `Canvas`/`GC`.
 - Log viewer: follow mode, tail 100/500/1000, stdout/stderr demultiplexed by the SDK.
 - Images and Volumes lists (read-only).
-- Docker-Desktop-like layout: blue header with search, grey sidebar, stat blocks, tree with status and
+- Docker-Desktop-like layout: blue header, grey sidebar, stat blocks, tree with status and
   action icons, footer. Light and dark palettes follow the system theme.
 
 ## Safety
