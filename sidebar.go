@@ -117,10 +117,7 @@ func (u *ui) buildSidebar(w *gowt.Window) *gowt.Panel {
 		t.ShowHeader(false)
 		t.ShowLines(false)
 		u.style(&t.Unwrap().Control, surf, inkNone)
-		col := t.Column("", sidebarWidth)
-		t.Unwrap().AddControlListener(swt.ControlListenerControlResizedAdapter(func(*swt.ControlEvent) {
-			col.SetWidth(int(t.Unwrap().GetClientArea().Width))
-		}))
+		// No column: with one as wide as the table the selection pill ran to the sidebar edge.
 		for _, pg := range sec.pages {
 			t.Row(navTitles[pg])
 		}
