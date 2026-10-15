@@ -172,8 +172,6 @@ func (u *ui) build() {
 		look.ToolbarItem{Space: true},
 		look.ToolbarItem{Title: "Search", OnSearch: u.search},
 	)
-	// The toolbar strip above the content shows the shell background.
-	u.style(&w.Unwrap().Control, surfContent, inkNone)
 	u.initFonts(&w.Unwrap().Control)
 	u.loadRowIcons()
 	u.loadNavIcons()
