@@ -22,7 +22,17 @@ var navSections = []struct {
 
 const (
 	sidebarWidth = 220
-	navIndent    = 16 // headings and the engine line start where the row icons do
+	navIndent    = 16 // macOS: headings and the engine line start where the row icons do
+)
+
+// Geometry of the painted sidebar of Linux and Windows.
+const (
+	navTop   = 16
+	navRowH  = 38
+	navInset = 12
+	navIcon  = 18
+	navHeadH = 24
+	navGap   = 8
 )
 
 // place is one entry of the page history; logID is the container shown on the Logs page.
@@ -84,9 +94,17 @@ func (u *ui) placeOf(page int) place {
 	return place{page: page}
 }
 
-// buildSidebar makes the source list: a heading and a one-column table per section, the engine
-// state at the bottom. surf is surfNone on macOS: look.SetSidebar clears backgrounds for the glass.
-func (u *ui) buildSidebar(w *gowt.Window, surf surface) *gowt.Panel {
+// buildSidebar makes the macOS source list (a heading and a one-column table per section, the engine
+// state at the bottom) or the painted sidebar of Linux and Windows. On macOS look.SetSidebar clears
+// the backgrounds for the glass.
+func (u *ui) buildSidebar(w *gowt.Window) *gowt.Panel {
+	if !u.native {
+		p := u.panel(w, surfSidebar, gowt.Grid{Columns: 1})
+		u.nav = p.Canvas(u.paintNav, fillBoth)
+		u.nav.Unwrap().AddMouseListener(swt.MouseListenerMouseDownAdapter(u.onNavClick))
+		return p
+	}
+	surf := surfNone
 	sb := u.panel(w, surf, gowt.Grid{Columns: 1})
 	for i, sec := range navSections {
 		h := u.label(sb, sec.title, surf, inkMuted, u.fonts.heading, fillX)
@@ -119,9 +137,96 @@ func (u *ui) buildSidebar(w *gowt.Window, surf surface) *gowt.Panel {
 }
 
 func (u *ui) setNavImages() {
+	for i, t := range u.navTables {
+		for j, pg := range navSections[i].pages {
+			t.RowAt(j).SetImage(0, u.navIcons[pg])
+		}
+	}
+}
+
+// navRow is a line of the painted sidebar: a section heading (page -1) or a page.
+type navRow struct {
+	page  int
+	title string
+	y     int
+}
+
+func navRows() []navRow {
+	var rows []navRow
+	y := navTop
 	for i, sec := range navSections {
-		for j, pg := range sec.pages {
-			u.navTables[i].RowAt(j).SetImage(0, u.navIcons[pg])
+		if i > 0 {
+			y += navGap
+		}
+		rows = append(rows, navRow{-1, sec.title, y})
+		y += navHeadH
+		for _, pg := range sec.pages {
+			rows = append(rows, navRow{pg, navTitles[pg], y})
+			y += navRowH
+		}
+	}
+	return rows
+}
+
+func (u *ui) paintNav(g *gowt.GC) {
+	p := &u.pal
+	w, h := u.nav.Size()
+	g.SetFill(p.sidebar)
+	g.FillRect(0, 0, w, h)
+	cur := u.hist.cur.Peek().page
+	for _, r := range navRows() {
+		if r.page < 0 {
+			font := g.Unwrap().GetFont()
+			g.Unwrap().SetFont(u.fonts.heading)
+			g.SetColor(p.muted)
+			_, th := g.TextSize(r.title)
+			g.Text(r.title, navInset+12, r.y+(navHeadH-th)/2)
+			g.Unwrap().SetFont(font)
+			continue
+		}
+		rh := navRowH - 4
+		bg := p.sidebar
+		if r.page == cur {
+			bg = p.selected
+		}
+		g.SetFill(bg)
+		g.FillRect(navInset, r.y, w-2*navInset, rh)
+		g.Image(u.navIcons[r.page], navInset+12, r.y+(rh-navIcon)/2)
+		g.SetColor(p.text)
+		_, th := g.TextSize(r.title)
+		g.Text(r.title, navInset+12+navIcon+12, r.y+(rh-th)/2)
+	}
+	u.paintEngine(g, h)
+}
+
+// paintEngine draws the engine state at the bottom of the sidebar.
+func (u *ui) paintEngine(g *gowt.GC, h int) {
+	p := &u.pal
+	dot, text := p.muted, "Connecting..."
+	switch u.engine.Peek() {
+	case engineUp:
+		dot, text = gowt.RGB{R: 46, G: 159, B: 107}, "Engine running"
+	case engineDown:
+		dot, text = gowt.RGB{R: 214, G: 69, B: 65}, "Engine not reachable"
+	}
+	y := h - 30
+	g.SetFill(dot)
+	g.FillOval(navInset+14, y+4, 10, 10)
+	g.SetFill(p.sidebar)
+	g.SetColor(p.muted)
+	g.Text(text, navInset+14+10+10, y)
+}
+
+// onNavClick opens the page under a plain left click.
+func (u *ui) onNavClick(e *swt.MouseEvent) {
+	if e.Button != 1 || e.Count != 1 {
+		return
+	}
+	w, _ := u.nav.Size()
+	for _, r := range navRows() {
+		if r.page >= 0 && int(e.X) >= navInset && int(e.X) < w-navInset && int(e.Y) >= r.y && int(e.Y) < r.y+navRowH-4 {
+			u.hist.Open(u.placeOf(r.page))
+			return
 		}
 	}
 }
@@ -156,12 +261,15 @@ func (u *ui) show(p place) {
 		u.logID.Set(p.logID)
 	}
 	u.pages.ShowTop(u.pageViews[p.page])
-	for i, sec := range navSections {
-		if j := slices.Index(sec.pages, p.page); j >= 0 {
-			u.navTables[i].SetSelection(j)
+	for i, t := range u.navTables {
+		if j := slices.Index(navSections[i].pages, p.page); j >= 0 {
+			t.SetSelection(j)
 		} else {
-			u.navTables[i].SetSelection()
+			t.SetSelection()
 		}
+	}
+	if u.nav != nil {
+		u.nav.Redraw()
 	}
 	if u.native {
 		u.win.SetTitle(navTitles[p.page])

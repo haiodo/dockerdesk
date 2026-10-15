@@ -52,7 +52,8 @@ type ui struct {
 
 	native    bool // macOS: native toolbar and glass sidebar instead of the blue header
 	hist      *navHistory
-	navTables []*gowt.Table
+	navTables []*gowt.Table // macOS source list
+	nav       *gowt.Canvas  // painted sidebar of Linux and Windows
 	pages     *gowt.Panel
 	pageViews []*gowt.Panel
 
@@ -176,11 +177,7 @@ func (u *ui) build() {
 	u.initFonts(&w.Unwrap().Control)
 	u.loadRowIcons()
 	u.loadNavIcons()
-	side := surfSidebar
-	if u.native {
-		side = surfNone
-	}
-	sidebar := u.buildSidebar(w, side)
+	sidebar := u.buildSidebar(w)
 	content := u.panel(w, surfContent, gowt.Grid{Columns: 1})
 	if !u.native {
 		u.buildHeader(content)
@@ -388,6 +385,9 @@ const (
 // react starts what follows the polls and the user's input beyond the bound labels.
 func (u *ui) react() {
 	gowt.Bind(u.win, u.hist.cur, u.show)
+	if u.nav != nil && !ab.noLabels {
+		gowt.Bind(u.nav, u.engine, func(int) { u.nav.Redraw() })
+	}
 	rx.Effect(func() {
 		if e := u.pollErr.Get(); e != "" {
 			log.Printf("engine error: %v", e)

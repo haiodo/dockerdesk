@@ -11,9 +11,9 @@ var (
 )
 
 type palette struct {
-	content, sidebar, footer gowt.RGB
-	text, muted, green, blue gowt.RGB
-	grid, chartBG            gowt.RGB
+	content, sidebar, selected, footer gowt.RGB
+	text, muted, green, blue           gowt.RGB
+	grid, chartBG                      gowt.RGB
 }
 
 // paletteFor returns light or dark colours; native widgets (tree, tables, buttons) follow the
@@ -21,13 +21,13 @@ type palette struct {
 func paletteFor(dark bool) palette {
 	if dark {
 		return palette{
-			content: gowt.RGB{R: 30, G: 31, B: 34}, sidebar: gowt.RGB{R: 38, G: 39, B: 43}, footer: gowt.RGB{R: 38, G: 39, B: 43},
+			content: gowt.RGB{R: 30, G: 31, B: 34}, sidebar: gowt.RGB{R: 38, G: 39, B: 43}, selected: gowt.RGB{R: 44, G: 62, B: 104}, footer: gowt.RGB{R: 38, G: 39, B: 43},
 			text: gowt.RGB{R: 231, G: 233, B: 237}, muted: gowt.RGB{R: 150, G: 155, B: 164}, green: gowt.RGB{R: 84, G: 190, B: 140}, blue: gowt.RGB{R: 96, G: 150, B: 255},
 			grid: gowt.RGB{R: 62, G: 64, B: 70}, chartBG: gowt.RGB{R: 30, G: 31, B: 34},
 		}
 	}
 	return palette{
-		content: white, sidebar: gowt.RGB{R: 244, G: 245, B: 247}, footer: gowt.RGB{R: 244, G: 245, B: 247},
+		content: white, sidebar: gowt.RGB{R: 244, G: 245, B: 247}, selected: gowt.RGB{R: 214, G: 227, B: 252}, footer: gowt.RGB{R: 244, G: 245, B: 247},
 		text: gowt.RGB{R: 28, G: 32, B: 40}, muted: gowt.RGB{R: 100, G: 106, B: 118}, green: gowt.RGB{R: 52, G: 125, B: 92}, blue: headerBlue,
 		grid: gowt.RGB{R: 230, G: 232, B: 236}, chartBG: white,
 	}
@@ -111,6 +111,9 @@ func (u *ui) onThemeChange(dark bool) {
 	}
 	u.loadNavIcons()
 	u.setNavImages()
+	if u.nav != nil {
+		u.nav.Redraw()
+	}
 	u.chart.Redraw()
 }
 
