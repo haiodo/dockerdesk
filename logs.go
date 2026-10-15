@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/haiodo/gowt"
+	"github.com/haiodo/gowt/rx"
 )
 
 const (
@@ -67,18 +68,31 @@ func shortStamp(line string) string {
 func (u *ui) buildLogs(p *gowt.Panel) {
 	u.label(p, "Logs", surfContent, inkText, u.fonts.title)
 	bar := u.panel(p, surfContent, gowt.Row{Spacing: gowt.Spacing.SM, Center: true}, fillX)
-	u.logTitle = bar.Label("Select a container and use View logs", gowt.InRow(gowt.RowCell{Width: 360}))
-	u.style(&u.logTitle.Unwrap().Control, surfContent, inkText)
+	title := bar.Label("", gowt.InRow(gowt.RowCell{Width: 360}))
+	u.style(&title.Unwrap().Control, surfContent, inkText)
+	title.BindText(rx.Compute(func() string {
+		id := u.logID.Get()
+		if id == "" {
+			return "Select a container and use View logs"
+		}
+		for _, c := range u.ctrs.Get() {
+			if c.ID == id {
+				return "Logs: " + c.Name()
+			}
+		}
+		return "Logs: "
+	}))
 	u.label(bar, "Tail", surfContent, inkText, nil)
-	u.logTail = bar.Combo(tailChoices, gowt.ReadOnly())
-	u.logTail.Select(1)
-	u.logTail.OnSelect(func(int) { u.restartLogs() })
-	u.logFollow = bar.Button("Follow", func() { u.restartLogs() }, gowt.Check())
-	u.style(&u.logFollow.Unwrap().Control, surfNone, inkNone) // native colours: the system theme draws the check box
-	u.logFollow.SetChecked(true)
+	tail := bar.Combo(tailChoices, gowt.ReadOnly())
+	tail.Select(u.tail.Peek())
+	tail.OnSelect(u.tail.Set)
+	follow := bar.Button("Follow", nil, gowt.Check())
+	follow.BindChecked(u.follow)
+	u.style(&follow.Unwrap().Control, surfNone, inkNone) // native colours: the system theme draws the check box
 	u.logText = p.StyledText(gowt.Scrollbars(), fillBoth)
 	u.logText.SetEditable(false)
 	u.logText.SetWrap(false)
+	rx.Effect(u.streamLogs)
 }
 
 // showLogs opens the Logs page for the selected container and starts the stream.
@@ -87,34 +101,24 @@ func (u *ui) showLogs() {
 	if !ok || k.id == "" {
 		return
 	}
-	u.logID = k.id
+	u.logID.Set(k.id)
 	u.openPage(pageLogs)
-	u.restartLogs()
 }
 
-func (u *ui) restartLogs() {
-	if u.logCancel != nil {
-		u.logCancel()
-	}
-	if u.logID == "" {
+// streamLogs is an effect: a new container, tail length or Follow restarts the stream, and the
+// cleanup cancels the previous one.
+func (u *ui) streamLogs() {
+	id, tailIdx, follow := u.logID.Get(), u.tail.Get(), u.follow.Get()
+	if id == "" {
 		return
 	}
-	var name string
-	for _, c := range u.all {
-		if c.ID == u.logID {
-			name = c.Name()
-		}
-	}
-	u.logTitle.SetText("Logs: " + name)
 	u.logText.SetText("")
 	u.logCount = 0
-	tail, _ := strconv.Atoi(tailChoices[max(u.logTail.Index(), 0)])
-	follow := u.logFollow.Checked()
+	tail, _ := strconv.Atoi(tailChoices[max(tailIdx, 0)])
 	ctx, cancel := context.WithCancel(u.ctx)
-	u.logCancel = cancel
+	rx.OnCleanup(cancel)
 	s := &logStream{start: time.Now()}
 	u.logCur = s
-	id := u.logID
 	go func() {
 		err := u.eng.Logs(ctx, id, tail, follow, s.add)
 		if traceLogs {
@@ -150,7 +154,7 @@ func (u *ui) appendLogs(lines []string) {
 		t2 = time.Now()
 	}
 	t3 := time.Now()
-	if u.logFollow.Checked() {
+	if u.follow.Peek() {
 		u.logText.SetTopLine(u.logText.Lines() - 1)
 	}
 	if traceLogs {

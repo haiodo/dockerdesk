@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/haiodo/gowt"
+	"github.com/haiodo/gowt/rx"
 )
 
 const actionWorkers = 8
@@ -31,8 +32,8 @@ func (u *ui) actOn(verb string, targets []*Ctr, group bool) {
 	if (verb != "start" || group) && !u.win.Confirm(title, fmt.Sprintf("%s %s?", title, describe(targets))) {
 		return
 	}
-	u.failure = ""
-	u.setStatus(fmt.Sprintf("%s %s...", title, describe(targets)))
+	u.failure.Set("")
+	u.status.Set(fmt.Sprintf("%s %s...", title, describe(targets)))
 	go func() {
 		errs := make([]error, len(targets))
 		sem := make(chan struct{}, actionWorkers)
@@ -62,8 +63,9 @@ func (u *ui) actionDone(verb string, err error) {
 	if err == nil {
 		return
 	}
-	u.failure = verb + " failed"
-	u.setStatus("Action failed: " + verb)
+	u.failure.Set(verb + " failed")
+	u.status.Set("Action failed: " + verb)
+	rx.Flush() // the footer shows the failure behind the modal box, as before rx
 	u.win.MessageBox(gowt.Message{Title: "Docker", Text: fmt.Sprintf("%s failed:\n%v", verb, err), Icon: gowt.IconError, Buttons: gowt.ButtonsOK})
 }
 

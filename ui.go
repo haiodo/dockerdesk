@@ -10,6 +10,7 @@ import (
 
 	"github.com/haiodo/gowt"
 	"github.com/haiodo/gowt/look"
+	"github.com/haiodo/gowt/rx"
 	"github.com/haiodo/gowt/swt"
 )
 
@@ -32,21 +33,6 @@ type container interface {
 	Label(text string, opts ...gowt.Option) *gowt.Label
 }
 
-// lbl is a label that touches the widget only when the text changed.
-type lbl struct {
-	l    *gowt.Label
-	last string
-}
-
-func (l *lbl) set(s string) bool {
-	if s == l.last {
-		return false
-	}
-	l.last = s
-	l.l.SetText(s)
-	return true
-}
-
 // ui holds the widgets and the state shown in them; everything here belongs to the UI thread.
 type ui struct {
 	app   *gowt.App
@@ -67,41 +53,110 @@ type ui struct {
 
 	nav       *gowt.Canvas
 	page      int
-	engine    int // engineConnecting until the first poll answers
-	lastErr   string
 	pages     *gowt.Panel
 	pageViews []*gowt.Panel
 
-	cpuVal, cpuSub, memVal, count, footL, footR *lbl
-	chartLink                                   *gowt.Link
-	chartShown                                  bool
+	count      *gowt.Label
+	chartLink  *gowt.Link
+	chartShown bool
 
-	query              string
-	only               *gowt.Button
+	// The poller posts whole snapshots; the rest is derived from them and from the user's input.
+	snap    *rx.State[*snapshot] // nil until the first poll answers
+	ctrs    *rx.Derived[[]*Ctr]  // the last successful poll
+	use     *rx.Derived[usage]
+	engine  *rx.Derived[int]
+	pollErr *rx.Derived[string]
+	status  *rx.State[string] // footer message until the next poll
+	failure *rx.State[string] // last failed action, kept in the footer until the next action
+	query   *rx.State[string]
+	onlyRun *rx.State[bool]
+	logID   *rx.State[string] // every Set restarts the stream, the same container included
+	tail    *rx.State[int]    // index into tailChoices
+	follow  *rx.State[bool]
+
 	tree               *gowt.Tree
 	menu               *gowt.Menu
 	chart              *gowt.Canvas
-	all, visible       []*Ctr
+	visible            []*Ctr
 	rows               []treeRow
 	items              []*swt.TreeItem
 	seen               map[string]bool
 	selID, selName     string
 	totalHist, selHist history
 
-	logTitle  *gowt.Label
-	logTail   *gowt.Combo
-	logFollow *gowt.Button
-	logText   *gowt.StyledText
-	logID     string
-	logCancel context.CancelFunc
-	logCur    *logStream
-	logCount  int
+	logText  *gowt.StyledText
+	logCur   *logStream
+	logCount int
 
 	images, volumes *listPage
-	failure         string // last failed action, kept in the footer until the next action
+}
+
+type usage struct {
+	cpu float64
+	mem int64
+}
+
+func (u *ui) initState() {
+	u.snap = rx.NewFunc[*snapshot](nil, nil)
+	u.ctrs = rx.ComputeFunc(func() []*Ctr {
+		if s := u.snap.Get(); s != nil {
+			return s.ctrs
+		}
+		return nil
+	}, sameList)
+	u.use = rx.Compute(func() usage { c, m := sumUsage(u.ctrs.Get()); return usage{c, m} })
+	u.engine = rx.Compute(func() int {
+		switch s := u.snap.Get(); {
+		case s == nil:
+			return engineConnecting
+		case s.err != nil:
+			return engineDown
+		}
+		return engineUp
+	})
+	u.pollErr = rx.Compute(func() string {
+		if s := u.snap.Get(); s != nil && s.err != nil {
+			return s.err.Error()
+		}
+		return ""
+	})
+	u.status, u.failure, u.query = rx.New(""), rx.New(""), rx.New("")
+	u.onlyRun, u.follow = rx.New(false), rx.New(true)
+	u.logID = rx.NewFunc("", nil)
+	u.tail = rx.New(1)
+}
+
+// sameList compares by identity: post keeps the previous list after a failed poll. Empty lists
+// from two polls compare equal; the chart follows snap, not this, so it still ticks.
+func sameList(a, b []*Ctr) bool {
+	return len(a) == len(b) && (a == nil) == (b == nil) && (len(a) == 0 || &a[0] == &b[0])
+}
+
+// post hands a poll result to the UI thread. A failed poll keeps the last good list, so the
+// tree, the stats and the chart stay as they were while the engine is unreachable.
+func (u *ui) post(s snapshot, good *[]*Ctr) {
+	if ab.noApply {
+		return
+	}
+	if s.err == nil {
+		*good = s.ctrs
+	}
+	s.ctrs = *good
+	if !u.trace {
+		u.snap.Post(&s)
+		return
+	}
+	u.app.Async(func() {
+		t0 := time.Now()
+		u.snap.Set(&s)
+		rx.Flush()
+		u.app.Unwrap().RunDeferredLayouts() // BindText lays out on the next loop turn; count it here
+		log.Printf("apply %s", time.Since(t0).Round(time.Microsecond))
+	})
 }
 
 func (u *ui) build() {
+	u.initState()
 	u.seen = map[string]bool{}
 	u.colors = map[gowt.RGB]*swt.Color{}
 	u.pal = paletteFor(u.app.Dark())
@@ -127,6 +182,7 @@ func (u *ui) build() {
 	u.buildPages()
 	u.buildFooter(root)
 	u.app.OnThemeChange(u.onThemeChange)
+	u.react()
 	w.OnClose(func() bool { u.stop(); return true })
 	// A fixed 1360x820 overflows smaller screens (the 1280x1024 Linux stand), cutting the right edge.
 	wd, ht := 1360, 820
@@ -138,13 +194,13 @@ func (u *ui) build() {
 }
 
 // label makes a styled label; the font may be nil for the system default.
-func (u *ui) label(p container, text string, s surface, i ink, f *swt.Font, opts ...gowt.Option) *lbl {
+func (u *ui) label(p container, text string, s surface, i ink, f *swt.Font, opts ...gowt.Option) *gowt.Label {
 	l := p.Label(text, opts...)
 	u.style(&l.Unwrap().Control, s, i)
 	if f != nil {
 		l.Unwrap().SetFont(f)
 	}
-	return &lbl{l, text}
+	return l
 }
 
 // panel makes a container painted with the surface colour.
@@ -184,10 +240,7 @@ func (u *ui) buildHeader(root *gowt.Panel) {
 func (u *ui) searchField(parent *swt.Composite, width int32) *swt.Text {
 	t := swt.NewText(parent, swt.SEARCH|swt.ICON_SEARCH)
 	t.SetMessage("Search")
-	t.AddModifyListener(&modifier{func() {
-		u.query = t.GetText()
-		u.render()
-	}})
+	t.AddModifyListener(&modifier{func() { u.query.Set(t.GetText()) }})
 	rd := swt.NewRowData()
 	rd.Width = width
 	t.SetLayoutData(rd)
@@ -200,8 +253,28 @@ func (m *modifier) ModifyText(*swt.ModifyEvent) { m.f() }
 
 func (u *ui) buildFooter(root *gowt.Panel) {
 	f := u.panel(root, surfFooter, gowt.Grid{Columns: 2, Margin: gowt.Spacing.SM, Spacing: gowt.Spacing.MD}, gowt.Cell(gowt.GridCell{Align: gowt.AlignFill, GrowX: true, SpanX: 2}))
-	u.footL = u.label(f, "Connecting...", surfFooter, inkText, u.fonts.small, fillX)
-	u.footR = u.label(f, "", surfFooter, inkBlue, u.fonts.small, alignEnd)
+	footL := u.label(f, "Connecting...", surfFooter, inkText, u.fonts.small, fillX)
+	u.label(f, "Docker "+u.info.ServerVersion, surfFooter, inkBlue, u.fonts.small, alignEnd)
+	if ab.noLabels {
+		return
+	}
+	footL.BindText(rx.Compute(func() string {
+		if s := u.status.Get(); s != "" {
+			return s
+		}
+		if e := u.pollErr.Get(); e != "" {
+			return "Engine not reachable: " + e
+		}
+		if u.engine.Get() == engineConnecting {
+			return "Connecting..."
+		}
+		x := u.use.Get()
+		msg := fmt.Sprintf("Containers: RAM %s   CPU %.2f%%", formatBytes(x.mem), x.cpu/float64(max(u.info.NCPU, 1)))
+		if f := u.failure.Get(); f != "" {
+			msg += "   |   last action failed: " + f
+		}
+		return msg
+	}))
 }
 
 func (u *ui) buildPages() {
@@ -232,8 +305,9 @@ func (u *ui) buildContainers(p *gowt.Panel) {
 	u.buildStats(p)
 	bar := u.panel(p, surfContent, gowt.Row{Spacing: gowt.Spacing.LG, Center: true}, fillX)
 	u.searchField(bar.AsComposite(), 320)
-	u.only = bar.Button("Only show running containers", func() { u.render() }, gowt.Check())
-	u.style(&u.only.Unwrap().Control, surfNone, inkNone) // native colours: the system theme draws the check box
+	only := bar.Button("Only show running containers", nil, gowt.Check())
+	only.BindChecked(u.onlyRun)
+	u.style(&only.Unwrap().Control, surfNone, inkNone) // native colours: the system theme draws the check box
 	u.buildTree(p)
 	u.chart = p.Canvas(u.paintChart, gowt.Cell(gowt.GridCell{Align: gowt.AlignFill, GrowX: true, Height: 170}))
 	u.showChart(os.Getenv("DOCKERDESK_CHARTS") == "1")
@@ -246,11 +320,25 @@ func (u *ui) buildStats(p *gowt.Panel) {
 	cpu := u.panel(row, surfContent, card, fillX)
 	u.label(cpu, "Container CPU usage", surfContent, inkText, u.fonts.small)
 	v := u.panel(cpu, surfContent, gowt.Grid{Columns: 2, Spacing: gowt.Spacing.SM})
-	u.cpuVal = u.label(v, "-", surfContent, inkGreen, u.fonts.big)
-	u.cpuSub = u.label(v, "", surfContent, inkMuted, u.fonts.small)
+	cpuVal := u.label(v, "-", surfContent, inkGreen, u.fonts.big)
+	u.label(v, fmt.Sprintf("(%d CPUs available)", u.info.NCPU), surfContent, inkMuted, u.fonts.small)
 	mem := u.panel(row, surfContent, card, fillX)
 	u.label(mem, "Container memory usage", surfContent, inkText, u.fonts.small)
-	u.memVal = u.label(mem, "-", surfContent, inkGreen, u.fonts.big)
+	memVal := u.label(mem, "-", surfContent, inkGreen, u.fonts.big)
+	if !ab.noLabels {
+		cpuVal.BindText(rx.Compute(func() string {
+			if u.engine.Get() == engineConnecting {
+				return "-"
+			}
+			return fmt.Sprintf("%.2f%% / %d00%%", u.use.Get().cpu, u.info.NCPU)
+		}))
+		memVal.BindText(rx.Compute(func() string {
+			if u.engine.Get() == engineConnecting {
+				return "-"
+			}
+			return formatBytes(u.use.Get().mem) + " / " + formatBytes(u.info.MemTotal)
+		}))
+	}
 	u.chartLink = row.Link(`<a href="toggle">Show charts</a>`, func(string) { u.showChart(!u.chartShown) }, alignEnd)
 	u.style(&u.chartLink.Unwrap().Control, surfContent, inkNone)
 }
@@ -277,75 +365,42 @@ const (
 	engineDown
 )
 
-// setEngine records reachability; only a change repaints the sidebar.
-func (u *ui) setEngine(state int) {
-	if state != u.engine {
-		u.engine = state
-		if !ab.noLabels {
-			u.nav.Redraw()
+// react starts what follows the polls and the user's input beyond the bound labels.
+func (u *ui) react() {
+	if !ab.noLabels {
+		gowt.Bind(u.nav, u.engine, func(int) { u.nav.Redraw() })
+	}
+	rx.Effect(func() {
+		if e := u.pollErr.Get(); e != "" {
+			log.Printf("engine error: %v", e)
 		}
-	}
-}
-
-// apply takes a poll result on the UI thread. Per cycle it touches: setEngine (sidebar redraw only
-// on a change), render (tree cell updates for changed cells only, or a rebuild when the row set
-// changed), the stat and footer labels (only when their text changed) and the chart canvas (only
-// while shown). It does not layout, pack columns, create images or toggle redraw outside rebuild.
-func (u *ui) apply(s snapshot) {
-	if ab.noApply {
-		return
-	}
-	t0 := time.Now()
-	defer func() {
-		if u.trace {
-			log.Printf("apply %s", time.Since(t0).Round(time.Microsecond))
+	})
+	// A new poll ends the footer message an action left there.
+	rx.Effect(func() { u.snap.Get(); u.status.Set("") })
+	rx.Effect(func() {
+		if s := u.snap.Get(); s == nil || s.err != nil {
+			return
 		}
-	}()
-	if s.err != nil {
-		u.applyError(s.err)
+		u.totalHist.push(u.use.Peek().cpu)
+		u.pushSelected()
+		u.redrawChart()
+	})
+	if ab.noTree {
 		return
 	}
-	u.all = s.ctrs
-	cpu, mem := sumUsage(u.all)
-	u.totalHist.push(cpu)
-	u.pushSelected()
-	if !ab.noTree {
-		u.render()
+	visible := rx.ComputeFunc(func() []*Ctr { return filterContainers(u.ctrs.Get(), u.query.Get(), u.onlyRun.Get()) }, nil)
+	rows := rx.ComputeFunc(func() []treeRow { return buildRows(groupContainers(visible.Get()), time.Now()) }, nil)
+	rx.Effect(func() {
+		u.visible = visible.Get()
+		u.render(rows.Get())
+	})
+	if !ab.noLabels {
+		u.count.BindText(rx.Compute(func() string { return fmt.Sprintf("Showing %d items", len(rows.Get())) }))
 	}
-	if ab.noLabels {
-		return
-	}
-	u.setEngine(engineUp)
-	// SetText does not re-run the layout, so a label sized for "-" would stay clipped on GTK.
-	changed := u.cpuVal.set(fmt.Sprintf("%.2f%% / %d00%%", cpu, u.info.NCPU))
-	changed = u.cpuSub.set(fmt.Sprintf("(%d CPUs available)", u.info.NCPU)) || changed
-	changed = u.memVal.set(formatBytes(mem)+" / "+formatBytes(u.info.MemTotal)) || changed
-	if changed {
-		u.pageViews[pageContainers].Unwrap().LayoutOverload2(true, true)
-	}
-	u.redrawChart()
-	msg := fmt.Sprintf("Containers: RAM %s   CPU %.2f%%", formatBytes(mem), cpu/float64(max(u.info.NCPU, 1)))
-	if u.failure != "" {
-		msg += "   |   last action failed: " + u.failure
-	}
-	u.footL.set(msg)
-	u.footR.set("Docker " + u.info.ServerVersion)
-}
-
-func (u *ui) applyError(err error) {
-	if err.Error() != u.lastErr {
-		u.lastErr = err.Error()
-		log.Printf("engine error: %v", err)
-	}
-	if ab.noLabels {
-		return
-	}
-	u.setEngine(engineDown)
-	u.footL.set("Engine not reachable: " + err.Error())
 }
 
 func (u *ui) pushSelected() {
-	for _, c := range u.all {
+	for _, c := range u.ctrs.Peek() {
 		if c.ID == u.selID {
 			u.selHist.push(c.CPU)
 			return
@@ -353,5 +408,3 @@ func (u *ui) pushSelected() {
 	}
 	u.selHist = nil
 }
-
-func (u *ui) setStatus(s string) { u.footL.set(s) }

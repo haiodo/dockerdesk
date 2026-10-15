@@ -30,7 +30,7 @@ func (u *ui) reload(lp *listPage) {
 		rows, err := lp.load(u.ctx)
 		u.app.Async(func() {
 			if err != nil {
-				u.setStatus("Cannot read list: " + err.Error())
+				u.status.Set("Cannot read list: " + err.Error())
 				return
 			}
 			lp.table.Clear()

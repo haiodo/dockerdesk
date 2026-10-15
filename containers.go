@@ -135,7 +135,7 @@ func anyRunning(cs []*Ctr) bool {
 func (u *ui) selectionChanged() {
 	u.selID, u.selName = "", ""
 	if k, ok := u.selectedKey(); ok && k.id != "" {
-		for _, c := range u.all {
+		for _, c := range u.ctrs.Peek() {
 			if c.ID == k.id {
 				u.selID, u.selName = c.ID, c.Name()
 			}
@@ -224,16 +224,11 @@ func memText(used, limit int64, running, failed bool) string {
 
 // render updates only the cells that changed when the set of rows is unchanged, so selection,
 // scroll and expansion survive the 2 s refresh; a changed set rebuilds the tree.
-func (u *ui) render() {
-	u.visible = filterContainers(u.all, u.query, u.only.Checked())
-	rows := buildRows(groupContainers(u.visible), time.Now())
+func (u *ui) render(rows []treeRow) {
 	if slices.EqualFunc(rows, u.rows, func(a, b treeRow) bool { return a.key == b.key && a.depth == b.depth }) {
 		u.updateRows(rows)
 	} else {
 		u.rebuild(rows)
-	}
-	if !ab.noLabels {
-		u.count.set(fmt.Sprintf("Showing %d items", len(rows)))
 	}
 }
 
