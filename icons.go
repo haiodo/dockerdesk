@@ -27,6 +27,21 @@ var rowShapes = map[string]string{
 	"stop":    `<rect x="3.5" y="3.5" width="9" height="9" rx="1.5" fill="#1D63ED"/>`,
 	"play":    `<path d="M5 3.5v9l7.5-4.5z" fill="none" stroke="#1D63ED" stroke-width="1.5" stroke-linejoin="round"/>`,
 	"more":    `<circle cx="8" cy="3.5" r="1.3" fill="#6B7280"/><circle cx="8" cy="8" r="1.3" fill="#6B7280"/><circle cx="8" cy="12.5" r="1.3" fill="#6B7280"/>`,
+	"down":    `<circle cx="8" cy="8" r="5" fill="#D64541"/>`,
+	"wait":    `<circle cx="8" cy="8" r="5" fill="#8A8F98"/>`,
+}
+
+var chevrons = map[string]string{"back": `<path d="M15 6l-6 6 6 6"/>`, "forward": `<path d="M9 6l6 6-6 6"/>`}
+
+// chevron is the back or forward glyph of the header buttons: white, or half blended into the
+// header blue while disabled, since GTK draws a disabled button image unchanged.
+func (u *ui) chevron(name string, on bool) *gowt.Image {
+	color := "#8eb1f6"
+	if on {
+		color = "#ffffff"
+	}
+	data := []byte(fmt.Sprintf(navSVG, chevrons[name]))
+	return u.app.ImageFromProvider(svg.NewImageDataProvider(data, 16, 16, color))
 }
 
 func (u *ui) loadRowIcons() {
