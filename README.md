@@ -25,10 +25,10 @@ Regenerate with `make shots` (see below).
 - Live CPU chart (last 60 samples) of the total and the selected container, drawn with the facade `Canvas`/`GC`.
 - Log viewer: follow mode, tail 100/500/1000, stdout/stderr demultiplexed by the SDK.
 - Images and Volumes lists (read-only).
-- Docker-Desktop-like layout: blue header with back and forward on Linux and Windows, grey sidebar,
-  stat card, tree with status and action icons, footer. On macOS the Finder look instead: native
-  toolbar (back/forward, page title, search) and a floating glass sidebar. Light and dark palettes
-  follow the system theme.
+- Docker-Desktop-like layout: toolbar with back and forward, the page title and search, grey
+  sidebar, stat card, tree with status and action icons, footer. On macOS the toolbar is native and
+  the sidebar floating glass (Finder look); on Linux and Windows gowt's look package draws the same
+  toolbar as a flat bar in the content colour. Light and dark palettes follow the system theme.
 - Page history like a browser: Back returns to the page you came from (Logs remembers its
   container). Keys: Cmd+[ / Cmd+] on macOS, Alt+Left / Alt+Right on Linux and Windows.
 

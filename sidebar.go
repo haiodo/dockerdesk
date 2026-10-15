@@ -268,9 +268,7 @@ func (u *ui) show(p place) {
 	if u.nav != nil {
 		u.nav.Redraw()
 	}
-	if u.native {
-		u.win.SetTitle(navTitles[p.page])
-	}
+	u.win.SetTitle(navTitles[p.page])
 	switch p.page {
 	case pageImages:
 		u.reload(u.images)
