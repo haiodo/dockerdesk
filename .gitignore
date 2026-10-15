@@ -1,2 +1,4 @@
 .work/
 bin/
+*.exe
+dockerdesk

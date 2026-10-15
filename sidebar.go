@@ -49,7 +49,7 @@ func (u *ui) paintNav(g *gowt.GC) {
 func (u *ui) paintEngine(g *gowt.GC, h int) {
 	p := &u.pal
 	dot, text := p.muted, "Connecting..."
-	switch u.engine {
+	switch u.engine.Peek() {
 	case engineUp:
 		dot, text = gowt.RGB{R: 46, G: 159, B: 107}, "Engine running"
 	case engineDown:
