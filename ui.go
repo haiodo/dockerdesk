@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"runtime"
 	"time"
 
 	"github.com/haiodo/gowt"
@@ -51,8 +50,10 @@ type ui struct {
 	rowIcons map[string]*gowt.Image
 	navIcons []*gowt.Image
 
-	nav       *gowt.Canvas
-	page      int
+	native    bool // macOS: native toolbar and glass sidebar instead of the blue header
+	hist      *navHistory
+	navTables []*gowt.Table // macOS source list
+	nav       *gowt.Canvas  // painted sidebar of Linux and Windows
 	pages     *gowt.Panel
 	pageViews []*gowt.Panel
 
@@ -124,6 +125,7 @@ func (u *ui) initState() {
 	u.onlyRun, u.follow = rx.New(false), rx.New(true)
 	u.logID = rx.NewFunc("", nil)
 	u.tail = rx.New(1)
+	u.hist = newNavHistory(place{page: pageContainers})
 }
 
 // sameList compares by identity: post keeps the previous list after a failed poll. Empty lists
@@ -162,26 +164,30 @@ func (u *ui) build() {
 	u.pal = paletteFor(u.app.Dark())
 	w := u.app.Window("dockerdesk")
 	u.win = w
-	// Content runs under the transparent title bar on macOS; the blue shell background fills that strip.
-	look.SetFullSizeContent(w, true)
-	if runtime.GOOS == "darwin" {
-		w.SetTitle("")
-	}
+	u.native = look.SetToolbar(w,
+		look.ToolbarItem{Title: "Back/Forward", Nav: true, Group: []look.ToolbarItem{
+			{Title: "Back", Symbol: "chevron.backward", OnClick: u.hist.Back, Enabled: u.hist.canBack},
+			{Title: "Forward", Symbol: "chevron.forward", OnClick: u.hist.Forward, Enabled: u.hist.canFwd},
+		}},
+		look.ToolbarItem{Space: true},
+		look.ToolbarItem{Title: "Search", OnSearch: u.search},
+	)
 	u.initFonts(&w.Unwrap().Control)
 	u.loadRowIcons()
 	u.loadNavIcons()
-	// One root panel under a Fill layout: the window layout would otherwise add the title bar height as a margin above the header.
-	w.SetLayout(gowt.Fill{})
-	root := w.Panel()
-	root.SetLayout(gowt.Grid{Columns: 2})
-	u.buildHeader(root)
-	u.buildSidebar(root)
-	u.pages = root.Panel(fillBoth)
+	sidebar := u.buildSidebar(w)
+	content := u.panel(w, surfContent, gowt.Grid{Columns: 1})
+	if !u.native {
+		u.buildHeader(content)
+	}
+	u.pages = content.Panel(fillBoth)
 	u.pages.SetLayout(gowt.Stack{})
 	u.style(&u.pages.Unwrap().Control, surfContent, inkNone)
 	u.buildPages()
-	u.buildFooter(root)
+	u.buildFooter(content)
+	look.SetSidebar(w, sidebar, content, sidebarWidth)
 	u.app.OnThemeChange(u.onThemeChange)
+	u.app.Unwrap().AddFilter(swt.KeyDown, navKeys{u.hist})
 	u.react()
 	w.OnClose(func() bool { u.stop(); return true })
 	// A fixed 1360x820 overflows smaller screens (the 1280x1024 Linux stand), cutting the right edge.
@@ -213,27 +219,45 @@ func (u *ui) panel(p container, s surface, l gowt.Layout, opts ...gowt.Option) *
 
 const (
 	headerHeight = 34 // about the macOS title bar: the traffic lights sit on its centre line
-	lightsInset  = 80 // traffic lights end near 69 pt
 	edgeInset    = 13 // the same gap the lights have from the window edge
 )
 
-// buildHeader is the compact blue row that stands in for the title bar on macOS. Every child grabs
-// the vertical space and centres in it, so the name shares the traffic lights' centre line.
-func (u *ui) buildHeader(root *gowt.Panel) {
-	h := u.panel(root, surfHeader, gowt.Grid{Columns: 3}, gowt.Cell(gowt.GridCell{Align: gowt.AlignFill, GrowX: true, SpanX: 2, Height: headerHeight}))
+// buildHeader is the compact blue row above the pages on Linux and Windows, where macOS has the
+// toolbar: back and forward, then the name. Every child grabs the vertical space and centres in it.
+func (u *ui) buildHeader(p *gowt.Panel) {
+	h := u.panel(p, surfHeader, gowt.Grid{Columns: 5, Spacing: gowt.Spacing.XS}, gowt.Cell(gowt.GridCell{Align: gowt.AlignFill, GrowX: true, Height: headerHeight}))
 	// TODO(wt/facade02): enable dragging the window by this panel once the facade option is released.
-	left := 0
-	if runtime.GOOS == "darwin" {
-		left = lightsInset
-	}
-	centered := gowt.GridCell{Align: gowt.AlignFill, VAlign: gowt.AlignCenter, GrowY: true}
+	centered := gowt.GridCell{VAlign: gowt.AlignCenter, GrowY: true}
 	spacer := func(w int) {
 		u.label(h, "", surfHeader, inkNone, nil, gowt.Cell(gowt.GridCell{Width: w, VAlign: gowt.AlignCenter, GrowY: true}))
 	}
-	spacer(left + 4)
-	centered.GrowX = true
+	spacer(edgeInset - gowt.Spacing.XS)
+	button := func(name, tip string, onClick func(), enabled *rx.State[bool]) {
+		b := h.Button("", onClick, gowt.Flat(), gowt.Tooltip(tip), gowt.Cell(centered))
+		u.style(&b.Unwrap().Control, surfHeader, inkNone)
+		on, off := u.chevron(name, true), u.chevron(name, false)
+		gowt.Bind(b, enabled, func(v bool) {
+			gowt.SetEnabled(b, v)
+			if v {
+				b.SetImage(on)
+			} else {
+				b.SetImage(off)
+			}
+		})
+	}
+	button("back", "Back (Alt+Left)", u.hist.Back, u.hist.canBack)
+	button("forward", "Forward (Alt+Right)", u.hist.Forward, u.hist.canFwd)
+	centered.Align, centered.GrowX = gowt.AlignFill, true
 	u.label(h, "dockerdesk", surfHeader, inkWhite, u.fonts.brand, gowt.Cell(centered))
 	spacer(edgeInset)
+}
+
+// search filters the containers from the toolbar search field and shows them.
+func (u *ui) search(text string) {
+	u.query.Set(text)
+	if text != "" {
+		u.hist.Open(place{page: pageContainers})
+	}
 }
 
 // searchField is a native search box (magnifier icon where the OS has one) that filters the containers.
@@ -252,7 +276,7 @@ type modifier struct{ f func() }
 func (m *modifier) ModifyText(*swt.ModifyEvent) { m.f() }
 
 func (u *ui) buildFooter(root *gowt.Panel) {
-	f := u.panel(root, surfFooter, gowt.Grid{Columns: 2, Margin: gowt.Spacing.SM, Spacing: gowt.Spacing.MD}, gowt.Cell(gowt.GridCell{Align: gowt.AlignFill, GrowX: true, SpanX: 2}))
+	f := u.panel(root, surfFooter, gowt.Grid{Columns: 2, Margin: gowt.Spacing.SM, Spacing: gowt.Spacing.MD}, fillX)
 	footL := u.label(f, "Connecting...", surfFooter, inkText, u.fonts.small, fillX)
 	u.label(f, "Docker "+u.info.ServerVersion, surfFooter, inkBlue, u.fonts.small, alignEnd)
 	if ab.noLabels {
@@ -288,23 +312,13 @@ func (u *ui) buildPages() {
 	u.pages.ShowTop(u.pageViews[pageContainers])
 }
 
-func (u *ui) openPage(i int) {
-	u.page = i
-	u.pages.ShowTop(u.pageViews[i])
-	u.nav.Redraw()
-	switch i {
-	case pageImages:
-		u.reload(u.images)
-	case pageVolumes:
-		u.reload(u.volumes)
-	}
-}
-
 func (u *ui) buildContainers(p *gowt.Panel) {
 	u.label(p, "Containers", surfContent, inkText, u.fonts.title)
 	u.buildStats(p)
 	bar := u.panel(p, surfContent, gowt.Row{Spacing: gowt.Spacing.LG, Center: true}, fillX)
-	u.searchField(bar.AsComposite(), 320)
+	if !u.native {
+		u.searchField(bar.AsComposite(), 320) // macOS has it in the toolbar
+	}
 	only := bar.Button("Only show running containers", nil, gowt.Check())
 	only.BindChecked(u.onlyRun)
 	u.style(&only.Unwrap().Control, surfNone, inkNone) // native colours: the system theme draws the check box
@@ -314,17 +328,19 @@ func (u *ui) buildContainers(p *gowt.Panel) {
 	u.count = u.label(p, "Showing 0 items", surfContent, inkText, u.fonts.small, alignEnd)
 }
 
+// buildStats puts the usage on a grouped card; its panels and labels paint no background of their
+// own, so they take the card colour.
 func (u *ui) buildStats(p *gowt.Panel) {
-	row := u.panel(p, surfContent, gowt.Grid{Columns: 3, Spacing: gowt.Spacing.XL}, fillX)
+	row := p.Section(fillX).Row().SetLayout(gowt.Grid{Columns: 3, Margin: gowt.Spacing.SM, Spacing: gowt.Spacing.XL})
 	card := gowt.Grid{Columns: 1, Spacing: gowt.Spacing.XS}
-	cpu := u.panel(row, surfContent, card, fillX)
-	u.label(cpu, "Container CPU usage", surfContent, inkText, u.fonts.small)
-	v := u.panel(cpu, surfContent, gowt.Grid{Columns: 2, Spacing: gowt.Spacing.SM})
-	cpuVal := u.label(v, "-", surfContent, inkGreen, u.fonts.big)
-	u.label(v, fmt.Sprintf("(%d CPUs available)", u.info.NCPU), surfContent, inkMuted, u.fonts.small)
-	mem := u.panel(row, surfContent, card, fillX)
-	u.label(mem, "Container memory usage", surfContent, inkText, u.fonts.small)
-	memVal := u.label(mem, "-", surfContent, inkGreen, u.fonts.big)
+	cpu := u.panel(row, surfNone, card, fillX)
+	u.label(cpu, "Container CPU usage", surfNone, inkText, u.fonts.small)
+	v := u.panel(cpu, surfNone, gowt.Grid{Columns: 2, Spacing: gowt.Spacing.SM})
+	cpuVal := u.label(v, "-", surfNone, inkGreen, u.fonts.big)
+	u.label(v, fmt.Sprintf("(%d CPUs available)", u.info.NCPU), surfNone, inkMuted, u.fonts.small)
+	mem := u.panel(row, surfNone, card, fillX)
+	u.label(mem, "Container memory usage", surfNone, inkText, u.fonts.small)
+	memVal := u.label(mem, "-", surfNone, inkGreen, u.fonts.big)
 	if !ab.noLabels {
 		cpuVal.BindText(rx.Compute(func() string {
 			if u.engine.Get() == engineConnecting {
@@ -340,7 +356,6 @@ func (u *ui) buildStats(p *gowt.Panel) {
 		}))
 	}
 	u.chartLink = row.Link(`<a href="toggle">Show charts</a>`, func(string) { u.showChart(!u.chartShown) }, alignEnd)
-	u.style(&u.chartLink.Unwrap().Control, surfContent, inkNone)
 }
 
 // showChart hides the chart by excluding it from the grid, which the facade has no call for.
@@ -367,7 +382,8 @@ const (
 
 // react starts what follows the polls and the user's input beyond the bound labels.
 func (u *ui) react() {
-	if !ab.noLabels {
+	gowt.Bind(u.win, u.hist.cur, u.show)
+	if u.nav != nil && !ab.noLabels {
 		gowt.Bind(u.nav, u.engine, func(int) { u.nav.Redraw() })
 	}
 	rx.Effect(func() {

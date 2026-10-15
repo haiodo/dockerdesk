@@ -110,11 +110,14 @@ func (u *ui) onThemeChange(dark bool) {
 		f()
 	}
 	u.loadNavIcons()
-	u.nav.Redraw()
+	u.setNavImages()
+	if u.nav != nil {
+		u.nav.Redraw()
+	}
 	u.chart.Redraw()
 }
 
-type fontSet struct{ brand, title, big, small, bold *swt.Font }
+type fontSet struct{ brand, title, heading, big, small, bold *swt.Font }
 
 // initFonts derives sizes from the system font of ref instead of naming a family, so each OS keeps its own.
 // The fonts live as long as the process, so they are never disposed.
@@ -124,5 +127,5 @@ func (u *ui) initFonts(ref *swt.Control) {
 	mk := func(scale float64, w gowt.Weight) *swt.Font {
 		return swt.NewFontDeviceNameHeightWeight(ref.GetDisplay(), "", int32(h*scale+0.5), int32(w), false)
 	}
-	u.fonts = fontSet{brand: mk(1.5, gowt.Bold), title: mk(1.15, gowt.Semibold), big: mk(1.15, gowt.Medium), small: mk(0.85, gowt.Regular), bold: mk(1.0, gowt.Bold)}
+	u.fonts = fontSet{brand: mk(1.5, gowt.Bold), title: mk(1.15, gowt.Semibold), heading: mk(0.85, gowt.Semibold), big: mk(1.15, gowt.Medium), small: mk(0.85, gowt.Regular), bold: mk(1.0, gowt.Bold)}
 }

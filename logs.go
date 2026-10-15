@@ -101,8 +101,7 @@ func (u *ui) showLogs() {
 	if !ok || k.id == "" {
 		return
 	}
-	u.logID.Set(k.id)
-	u.openPage(pageLogs)
+	u.hist.Open(place{page: pageLogs, logID: k.id})
 }
 
 // streamLogs is an effect: a new container, tail length or Follow restarts the stream, and the
