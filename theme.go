@@ -6,7 +6,7 @@ import (
 )
 
 var (
-	headerBlue = gowt.RGB{R: 29, G: 99, B: 237}
+	dockerBlue = gowt.RGB{R: 29, G: 99, B: 237}
 	white      = gowt.RGB{R: 255, G: 255, B: 255}
 )
 
@@ -28,7 +28,7 @@ func paletteFor(dark bool) palette {
 	}
 	return palette{
 		content: white, sidebar: gowt.RGB{R: 244, G: 245, B: 247}, selected: gowt.RGB{R: 214, G: 227, B: 252}, footer: gowt.RGB{R: 244, G: 245, B: 247},
-		text: gowt.RGB{R: 28, G: 32, B: 40}, muted: gowt.RGB{R: 100, G: 106, B: 118}, green: gowt.RGB{R: 52, G: 125, B: 92}, blue: headerBlue,
+		text: gowt.RGB{R: 28, G: 32, B: 40}, muted: gowt.RGB{R: 100, G: 106, B: 118}, green: gowt.RGB{R: 52, G: 125, B: 92}, blue: dockerBlue,
 		grid: gowt.RGB{R: 230, G: 232, B: 236}, chartBG: white,
 	}
 }
@@ -37,7 +37,6 @@ type surface int
 
 const (
 	surfNone surface = iota
-	surfHeader
 	surfContent
 	surfSidebar
 	surfFooter
@@ -51,13 +50,10 @@ const (
 	inkMuted
 	inkGreen
 	inkBlue
-	inkWhite
 )
 
 func (p *palette) surfaceColor(s surface) gowt.RGB {
 	switch s {
-	case surfHeader:
-		return headerBlue
 	case surfSidebar:
 		return p.sidebar
 	case surfFooter:
@@ -74,8 +70,6 @@ func (p *palette) inkColor(i ink) gowt.RGB {
 		return p.green
 	case inkBlue:
 		return p.blue
-	case inkWhite:
-		return white
 	}
 	return p.text
 }
@@ -117,7 +111,7 @@ func (u *ui) onThemeChange(dark bool) {
 	u.chart.Redraw()
 }
 
-type fontSet struct{ brand, title, heading, big, small, bold *swt.Font }
+type fontSet struct{ title, heading, big, small, bold *swt.Font }
 
 // initFonts derives sizes from the system font of ref instead of naming a family, so each OS keeps its own.
 // The fonts live as long as the process, so they are never disposed.
@@ -127,5 +121,5 @@ func (u *ui) initFonts(ref *swt.Control) {
 	mk := func(scale float64, w gowt.Weight) *swt.Font {
 		return swt.NewFontDeviceNameHeightWeight(ref.GetDisplay(), "", int32(h*scale+0.5), int32(w), false)
 	}
-	u.fonts = fontSet{brand: mk(1.5, gowt.Bold), title: mk(1.15, gowt.Semibold), heading: mk(0.85, gowt.Semibold), big: mk(1.15, gowt.Medium), small: mk(0.85, gowt.Regular), bold: mk(1.0, gowt.Bold)}
+	u.fonts = fontSet{title: mk(1.15, gowt.Semibold), heading: mk(0.85, gowt.Semibold), big: mk(1.15, gowt.Medium), small: mk(0.85, gowt.Regular), bold: mk(1.0, gowt.Bold)}
 }

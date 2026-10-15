@@ -50,7 +50,7 @@ type ui struct {
 	rowIcons map[string]*gowt.Image
 	navIcons []*gowt.Image
 
-	native    bool // macOS: native toolbar and glass sidebar instead of the blue header
+	native    bool // macOS: native toolbar and glass sidebar
 	hist      *navHistory
 	navTables []*gowt.Table // macOS source list
 	nav       *gowt.Canvas  // painted sidebar of Linux and Windows
@@ -177,9 +177,6 @@ func (u *ui) build() {
 	u.loadNavIcons()
 	sidebar := u.buildSidebar(w)
 	content := u.panel(w, surfContent, gowt.Grid{Columns: 1})
-	if !u.native {
-		u.buildHeader(content)
-	}
 	u.pages = content.Panel(fillBoth)
 	u.pages.SetLayout(gowt.Stack{})
 	u.style(&u.pages.Unwrap().Control, surfContent, inkNone)
@@ -217,41 +214,6 @@ func (u *ui) panel(p container, s surface, l gowt.Layout, opts ...gowt.Option) *
 	return c
 }
 
-const (
-	headerHeight = 34 // about the macOS title bar: the traffic lights sit on its centre line
-	edgeInset    = 13 // the same gap the lights have from the window edge
-)
-
-// buildHeader is the compact blue row above the pages on Linux and Windows, where macOS has the
-// toolbar: back and forward, then the name. Every child grabs the vertical space and centres in it.
-func (u *ui) buildHeader(p *gowt.Panel) {
-	h := u.panel(p, surfHeader, gowt.Grid{Columns: 5, Spacing: gowt.Spacing.XS}, gowt.Cell(gowt.GridCell{Align: gowt.AlignFill, GrowX: true, Height: headerHeight}))
-	// TODO(wt/facade02): enable dragging the window by this panel once the facade option is released.
-	centered := gowt.GridCell{VAlign: gowt.AlignCenter, GrowY: true}
-	spacer := func(w int) {
-		u.label(h, "", surfHeader, inkNone, nil, gowt.Cell(gowt.GridCell{Width: w, VAlign: gowt.AlignCenter, GrowY: true}))
-	}
-	spacer(edgeInset - gowt.Spacing.XS)
-	button := func(name, tip string, onClick func(), enabled *rx.State[bool]) {
-		b := h.Button("", onClick, gowt.Flat(), gowt.Tooltip(tip), gowt.Cell(centered))
-		u.style(&b.Unwrap().Control, surfHeader, inkNone)
-		on, off := u.chevron(name, true), u.chevron(name, false)
-		gowt.Bind(b, enabled, func(v bool) {
-			gowt.SetEnabled(b, v)
-			if v {
-				b.SetImage(on)
-			} else {
-				b.SetImage(off)
-			}
-		})
-	}
-	button("back", "Back (Alt+Left)", u.hist.Back, u.hist.canBack)
-	button("forward", "Forward (Alt+Right)", u.hist.Forward, u.hist.canFwd)
-	centered.Align, centered.GrowX = gowt.AlignFill, true
-	u.label(h, "dockerdesk", surfHeader, inkWhite, u.fonts.brand, gowt.Cell(centered))
-	spacer(edgeInset)
-}
-
 // search filters the containers from the toolbar search field and shows them.
 func (u *ui) search(text string) {
 	u.query.Set(text)
@@ -259,21 +221,6 @@ func (u *ui) search(text string) {
 		u.hist.Open(place{page: pageContainers})
 	}
 }
-
-// searchField is a native search box (magnifier icon where the OS has one) that filters the containers.
-func (u *ui) searchField(parent *swt.Composite, width int32) *swt.Text {
-	t := swt.NewText(parent, swt.SEARCH|swt.ICON_SEARCH)
-	t.SetMessage("Search")
-	t.AddModifyListener(&modifier{func() { u.query.Set(t.GetText()) }})
-	rd := swt.NewRowData()
-	rd.Width = width
-	t.SetLayoutData(rd)
-	return t
-}
-
-type modifier struct{ f func() }
-
-func (m *modifier) ModifyText(*swt.ModifyEvent) { m.f() }
 
 func (u *ui) buildFooter(root *gowt.Panel) {
 	f := u.panel(root, surfFooter, gowt.Grid{Columns: 2, Margin: gowt.Spacing.SM, Spacing: gowt.Spacing.MD}, fillX)
@@ -316,9 +263,6 @@ func (u *ui) buildContainers(p *gowt.Panel) {
 	u.label(p, "Containers", surfContent, inkText, u.fonts.title)
 	u.buildStats(p)
 	bar := u.panel(p, surfContent, gowt.Row{Spacing: gowt.Spacing.LG, Center: true}, fillX)
-	if !u.native {
-		u.searchField(bar.AsComposite(), 320) // macOS has it in the toolbar
-	}
 	only := bar.Button("Only show running containers", nil, gowt.Check())
 	only.BindChecked(u.onlyRun)
 	u.style(&only.Unwrap().Control, surfNone, inkNone) // native colours: the system theme draws the check box
