@@ -1,12 +1,10 @@
 package main
 
 import (
-	"runtime"
 	"slices"
 
 	"github.com/haiodo/gowt"
 	"github.com/haiodo/gowt/rx"
-	"github.com/haiodo/gowt/swt"
 )
 
 var navTitles = []string{"Containers", "Images", "Volumes", "Logs"}
@@ -94,51 +92,62 @@ func (u *ui) placeOf(page int) place {
 	return place{page: page}
 }
 
-// buildSidebar makes the macOS source list (a heading and a one-column table per section, the engine
+// sidebar makes the macOS source list (a heading and a one-column table per section, the engine
 // state at the bottom) or the painted sidebar of Linux and Windows. On macOS look.SetSidebar clears
 // the backgrounds for the glass.
-func (u *ui) buildSidebar(w *gowt.Window) *gowt.Panel {
+func (u *ui) sidebar(ref gowt.Option) gowt.Option {
 	if !u.native {
-		p := u.panel(w, surfSidebar, gowt.Grid{Columns: 1})
-		u.nav = p.Canvas(u.paintNav, fillBoth)
-		u.nav.Unwrap().AddMouseListener(swt.MouseListenerMouseDownAdapter(u.onNavClick))
-		return p
+		return gowt.VBox(ref, gowt.Gap(0), u.paint(surfSidebar, inkNone),
+			gowt.Canvas(u.paintNav, gowt.Grow(), gowt.Ref(&u.nav), gowt.Init(func(c *gowt.CanvasView) {
+				c.OnMouseDown(u.onNavClick)
+				gowt.Watch(c, u.page, func(int) { c.Redraw() })
+				gowt.Watch(c, u.pal, func(palette) { c.Redraw() })
+				if !ab.noLabels {
+					gowt.Watch(c, u.engine, func(int) { c.Redraw() })
+				}
+			})))
 	}
-	surf := surfNone
-	sb := u.panel(w, surf, gowt.Grid{Columns: 1})
+	sb := []gowt.Option{ref, gowt.Gap(0)}
 	for i, sec := range navSections {
-		h := u.label(sb, sec.title, surf, inkMuted, u.fonts.heading, fillX)
-		gd := h.Unwrap().GetLayoutData().(*swt.GridData)
-		gd.HorizontalIndent, gd.VerticalIndent = navIndent, int32(gowt.Spacing.SM)
+		top := gowt.Spacing.SM
 		if i > 0 {
-			gd.VerticalIndent = int32(gowt.Spacing.LG)
+			top = gowt.Spacing.LG
 		}
-		t := sb.Table(gowt.NoBorder(), fillX)
-		t.ShowHeader(false)
-		t.ShowLines(false)
-		u.style(&t.Unwrap().Control, surf, inkNone)
-		// No column: with one as wide as the table the selection pill ran to the sidebar edge.
-		for _, pg := range sec.pages {
-			t.Row(navTitles[pg])
-		}
-		t.OnSelect(func(j int) {
-			if j >= 0 {
-				u.hist.Open(u.placeOf(sec.pages[j]))
-			}
-		})
-		u.navTables = append(u.navTables, t)
+		sb = append(sb,
+			gowt.Label(sec.title, gowt.GrowX(), u.paint(surfNone, inkMuted), u.fonts.heading, gowt.Indent(navIndent, top)),
+			u.navTable(sec.pages))
 	}
-	u.setNavImages()
-	u.buildEngineLine(sb, surf)
-	return sb
+	return gowt.VBox(append(sb, u.engineLine())...)
 }
 
-func (u *ui) setNavImages() {
-	for i, t := range u.navTables {
-		for j, pg := range navSections[i].pages {
-			t.RowAt(j).SetImage(0, u.navIcons[pg])
-		}
-	}
+// navTable lists the pages of one sidebar section and follows the current page.
+func (u *ui) navTable(pages []int) gowt.Option {
+	return gowt.Table(gowt.NoBorder(), gowt.GrowX(),
+		gowt.Init(func(t *gowt.TableView) {
+			t.ShowHeader(false)
+			t.ShowLines(false)
+			// No column: with one as wide as the table the selection pill ran to the sidebar edge.
+			for _, pg := range pages {
+				t.Row(navTitles[pg])
+			}
+			t.OnSelect(func(j int) {
+				if j >= 0 {
+					u.hist.Open(u.placeOf(pages[j]))
+				}
+			})
+			gowt.Watch(t, u.navIcons, func(icons []*gowt.Image) {
+				for j, pg := range pages {
+					t.RowAt(j).SetImage(0, icons[pg])
+				}
+			})
+			gowt.Watch(t, u.page, func(p int) {
+				if j := slices.Index(pages, p); j >= 0 {
+					t.SetSelection(j)
+				} else {
+					t.SetSelection()
+				}
+			})
+		}))
 }
 
 // navRow is a line of the painted sidebar: a section heading (page -1) or a page.
@@ -166,19 +175,19 @@ func navRows() []navRow {
 }
 
 func (u *ui) paintNav(g *gowt.GC) {
-	p := &u.pal
+	p := u.pal.Peek()
+	icons := u.navIcons.Peek()
 	w, h := u.nav.Size()
 	g.SetFill(p.sidebar)
 	g.FillRect(0, 0, w, h)
-	cur := u.hist.cur.Peek().page
+	cur := u.page.Peek()
 	for _, r := range navRows() {
 		if r.page < 0 {
-			font := g.Unwrap().GetFont()
-			g.Unwrap().SetFont(u.fonts.heading)
+			g.SetFont(u.fonts.navHeading)
 			g.SetColor(p.muted)
 			_, th := g.TextSize(r.title)
 			g.Text(r.title, navInset+12, r.y+(navHeadH-th)/2)
-			g.Unwrap().SetFont(font)
+			g.SetFont(gowt.Font{})
 			continue
 		}
 		rh := navRowH - 4
@@ -188,7 +197,7 @@ func (u *ui) paintNav(g *gowt.GC) {
 		}
 		g.SetFill(bg)
 		g.FillRect(navInset, r.y, w-2*navInset, rh)
-		g.Image(u.navIcons[r.page], navInset+12, r.y+(rh-navIcon)/2)
+		g.Image(icons[r.page], navInset+12, r.y+(rh-navIcon)/2)
 		g.SetColor(p.text)
 		_, th := g.TextSize(r.title)
 		g.Text(r.title, navInset+12+navIcon+12, r.y+(rh-th)/2)
@@ -198,7 +207,7 @@ func (u *ui) paintNav(g *gowt.GC) {
 
 // paintEngine draws the engine state at the bottom of the sidebar.
 func (u *ui) paintEngine(g *gowt.GC, h int) {
-	p := &u.pal
+	p := u.pal.Peek()
 	dot, text := p.muted, "Connecting..."
 	switch u.engine.Peek() {
 	case engineUp:
@@ -215,96 +224,55 @@ func (u *ui) paintEngine(g *gowt.GC, h int) {
 }
 
 // onNavClick opens the page under a plain left click.
-func (u *ui) onNavClick(e *swt.MouseEvent) {
-	if e.Button != 1 || e.Count != 1 {
+func (u *ui) onNavClick(m gowt.Mouse) {
+	if m.Button != 1 || m.Count != 1 {
 		return
 	}
 	w, _ := u.nav.Size()
 	for _, r := range navRows() {
-		if r.page >= 0 && int(e.X) >= navInset && int(e.X) < w-navInset && int(e.Y) >= r.y && int(e.Y) < r.y+navRowH-4 {
+		if r.page >= 0 && m.X >= navInset && m.X < w-navInset && m.Y >= r.y && m.Y < r.y+navRowH-4 {
 			u.hist.Open(u.placeOf(r.page))
 			return
 		}
 	}
 }
 
-// buildEngineLine shows the engine state at the bottom of the sidebar: a coloured dot and a word.
-func (u *ui) buildEngineLine(sb *gowt.Panel, surf surface) {
-	line := u.panel(sb, surf, gowt.Grid{Columns: 2, Margin: gowt.Spacing.SM, Spacing: gowt.Spacing.SM},
-		gowt.Cell(gowt.GridCell{Align: gowt.AlignFill, VAlign: gowt.AlignEnd, GrowX: true, GrowY: true}))
-	dot := u.label(line, "", surf, inkNone, nil, gowt.Cell(gowt.GridCell{VAlign: gowt.AlignCenter}))
-	dot.Unwrap().GetLayoutData().(*swt.GridData).HorizontalIndent = int32(navIndent - gowt.Spacing.SM)
-	dot.SetImage(u.rowIcons["wait"])
-	text := u.label(line, "Connecting...", surf, inkMuted, u.fonts.small, fillX)
-	if ab.noLabels {
-		return
-	}
-	gowt.Bind(text, u.engine, func(e int) {
-		icon, s := "wait", "Connecting..."
-		switch e {
-		case engineUp:
-			icon, s = "running", "Engine running"
-		case engineDown:
-			icon, s = "down", "Engine not reachable"
-		}
-		dot.SetImage(u.rowIcons[icon])
-		text.SetText(s)
-	})
+// engineLine shows the engine state at the bottom of the sidebar: a coloured dot and a word.
+func (u *ui) engineLine() gowt.Option {
+	return gowt.Grid(2, gowt.Padding(gowt.Spacing.SM), gowt.Gap(gowt.Spacing.SM), gowt.Grow(), gowt.Place(gowt.AlignFill, gowt.AlignEnd),
+		gowt.Label("", gowt.Place(gowt.AlignStart, gowt.AlignCenter), gowt.Indent(navIndent-gowt.Spacing.SM, 0), gowt.Init(func(l *gowt.LabelView) {
+			l.SetImage(u.rowIcons["wait"])
+			if !ab.noLabels {
+				gowt.Watch(l, u.engine, func(e int) { l.SetImage(u.rowIcons[engineIcon(e)]) })
+			}
+		})),
+		gowt.Label("Connecting...", gowt.GrowX(), u.paint(surfNone, inkMuted), u.fonts.small, textOf(func() string { return engineText(u.engine.Get()) })))
 }
 
-// show puts place p on screen; it runs whenever the history moves.
-func (u *ui) show(p place) {
-	if p.page == pageLogs && p.logID != "" && p.logID != u.logID.Peek() {
-		u.logID.Set(p.logID)
+func engineIcon(e int) string {
+	switch e {
+	case engineUp:
+		return "running"
+	case engineDown:
+		return "down"
 	}
-	u.pages.ShowTop(u.pageViews[p.page])
-	for i, t := range u.navTables {
-		if j := slices.Index(navSections[i].pages, p.page); j >= 0 {
-			t.SetSelection(j)
-		} else {
-			t.SetSelection()
-		}
-	}
-	if u.nav != nil {
-		u.nav.Redraw()
-	}
-	u.win.SetTitle(navTitles[p.page])
-	switch p.page {
-	case pageImages:
-		u.reload(u.images)
-	case pageVolumes:
-		u.reload(u.volumes)
-	}
+	return "wait"
 }
 
-// navKeys moves through the history with Cmd+[ and Cmd+] on macOS, Alt+Left and Alt+Right elsewhere.
-type navKeys struct{ h *navHistory }
-
-func (k navKeys) HandleEvent(e *swt.Event) {
-	switch navKey(runtime.GOOS, e.StateMask&swt.MODIFIER_MASK, e.KeyCode) {
-	case -1:
-		k.h.Back()
-	case 1:
-		k.h.Forward()
-	default:
-		return
+func engineText(e int) string {
+	switch e {
+	case engineUp:
+		return "Engine running"
+	case engineDown:
+		return "Engine not reachable"
 	}
-	e.Doit = false
+	return "Connecting..."
 }
 
-// navKey maps a key press to -1 for back, 1 for forward and 0 for any other key.
-func navKey(goos string, mods, key int32) int {
-	back, fwd, want := int32(swt.ARROW_LEFT), int32(swt.ARROW_RIGHT), int32(swt.ALT)
+// navKeys returns the back and forward keys: Cmd+[ and Cmd+] on macOS, Alt+Left and Alt+Right elsewhere.
+func navKeys(goos string) (back, forward string) {
 	if goos == "darwin" {
-		back, fwd, want = '[', ']', swt.COMMAND
+		return "Cmd+[", "Cmd+]"
 	}
-	switch {
-	case mods != want:
-		return 0
-	case key == back:
-		return -1
-	case key == fwd:
-		return 1
-	}
-	return 0
+	return "Alt+Left", "Alt+Right"
 }

@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/haiodo/gowt"
 	"github.com/haiodo/gowt/look"
 	"github.com/haiodo/gowt/rx"
-	"github.com/haiodo/gowt/swt"
 )
 
 const (
@@ -19,18 +19,6 @@ const (
 	pageVolumes
 	pageLogs
 )
-
-var (
-	fillBoth = gowt.Cell(gowt.GridCell{Align: gowt.AlignFill, VAlign: gowt.AlignFill, GrowX: true, GrowY: true})
-	fillX    = gowt.Cell(gowt.GridCell{Align: gowt.AlignFill, GrowX: true})
-	alignEnd = gowt.Cell(gowt.GridCell{Align: gowt.AlignEnd})
-)
-
-// container is what Window and Panel share for building children.
-type container interface {
-	Panel(opts ...gowt.Option) *gowt.Panel
-	Label(text string, opts ...gowt.Option) *gowt.Label
-}
 
 // ui holds the widgets and the state shown in them; everything here belongs to the UI thread.
 type ui struct {
@@ -43,23 +31,16 @@ type ui struct {
 	poll  *poller
 	trace bool // -mem: log the duration of every apply
 
-	pal      palette
-	colors   map[gowt.RGB]*swt.Color
-	restyle  []func()
+	pal      *rx.State[palette]
 	fonts    fontSet
 	rowIcons map[string]*gowt.Image
-	navIcons []*gowt.Image
+	navIcons *rx.State[[]*gowt.Image] // tinted for the current palette
 
-	native    bool // macOS: native toolbar and glass sidebar
-	hist      *navHistory
-	navTables []*gowt.Table // macOS source list
-	nav       *gowt.Canvas  // painted sidebar of Linux and Windows
-	pages     *gowt.Panel
-	pageViews []*gowt.Panel
-
-	count      *gowt.Label
-	chartLink  *gowt.Link
-	chartShown bool
+	native  bool // macOS: native toolbar and glass sidebar
+	hist    *navHistory
+	page    *rx.Derived[int] // the page of the current place
+	nav     *gowt.CanvasView // painted sidebar of Linux and Windows
+	chartOn *rx.State[bool]
 
 	// The poller posts whole snapshots; the rest is derived from them and from the user's input.
 	snap    *rx.State[*snapshot] // nil until the first poll answers
@@ -74,22 +55,20 @@ type ui struct {
 	logID   *rx.State[string] // every Set restarts the stream, the same container included
 	tail    *rx.State[int]    // index into tailChoices
 	follow  *rx.State[bool]
+	visible *rx.Derived[[]*Ctr]
+	shown   *rx.Derived[[]treeRow] // the tree rows for visible
 
-	tree               *gowt.Tree
+	tree               *gowt.TreeView
 	menu               *gowt.Menu
-	chart              *gowt.Canvas
-	visible            []*Ctr
+	chart              *gowt.CanvasView
 	rows               []treeRow
-	items              []*swt.TreeItem
+	items              []*gowt.Node
 	seen               map[string]bool
 	selID, selName     string
 	totalHist, selHist history
 
-	logText  *gowt.StyledText
-	logCur   *logStream
-	logCount int
-
-	images, volumes *listPage
+	logText *gowt.StyledTextView
+	logCur  *logStream
 }
 
 type usage struct {
@@ -125,7 +104,12 @@ func (u *ui) initState() {
 	u.onlyRun, u.follow = rx.New(false), rx.New(true)
 	u.logID = rx.NewFunc("", nil)
 	u.tail = rx.New(1)
+	u.visible = rx.ComputeFunc(func() []*Ctr { return filterContainers(u.ctrs.Get(), u.query.Get(), u.onlyRun.Get()) }, nil)
+	u.shown = rx.ComputeFunc(func() []treeRow { return buildRows(groupContainers(u.visible.Get()), time.Now()) }, nil)
 	u.hist = newNavHistory(place{page: pageContainers})
+	u.page = rx.Compute(func() int { return u.hist.cur.Get().page })
+	u.pal = rx.New(paletteFor(u.app.Dark()))
+	u.chartOn = rx.New(os.Getenv("DOCKERDESK_CHARTS") == "1")
 }
 
 // sameList compares by identity: post keeps the previous list after a failed poll. Empty lists
@@ -151,8 +135,7 @@ func (u *ui) post(s snapshot, good *[]*Ctr) {
 	u.app.Async(func() {
 		t0 := time.Now()
 		u.snap.Set(&s)
-		rx.Flush()
-		u.app.Unwrap().RunDeferredLayouts() // BindText lays out on the next loop turn; count it here
+		u.app.Flush() // BindText lays out on the next loop turn; count it here
 		log.Printf("apply %s", time.Since(t0).Round(time.Microsecond))
 	})
 }
@@ -160,8 +143,6 @@ func (u *ui) post(s snapshot, good *[]*Ctr) {
 func (u *ui) build() {
 	u.initState()
 	u.seen = map[string]bool{}
-	u.colors = map[gowt.RGB]*swt.Color{}
-	u.pal = paletteFor(u.app.Dark())
 	w := u.app.Window("dockerdesk")
 	u.win = w
 	u.native = look.SetToolbar(w,
@@ -174,44 +155,48 @@ func (u *ui) build() {
 	)
 	u.initFonts(&w.Unwrap().Control)
 	u.loadRowIcons()
-	u.loadNavIcons()
-	sidebar := u.buildSidebar(w)
-	content := u.panel(w, surfContent, gowt.Grid{Columns: 1})
-	u.pages = content.Panel(fillBoth)
-	u.pages.SetLayout(gowt.Stack{})
-	u.style(&u.pages.Unwrap().Control, surfContent, inkNone)
-	u.buildPages()
-	u.buildFooter(content)
+	u.navIcons = rx.NewFunc(u.loadNavIcons(u.pal.Peek()), nil)
+	var sidebar, content *gowt.Panel
+	w.Add(
+		u.sidebar(gowt.Ref(&sidebar)),
+		gowt.VBox(gowt.Ref(&content), gowt.Gap(0), u.paint(surfContent, inkNone),
+			gowt.Pages(gowt.Grow(), u.paint(surfContent, inkNone), gowt.Init(func(p *gowt.PagesView) { gowt.Watch(p, u.page, p.Show) }),
+				u.containersPage(),
+				u.listPage(pageImages, "Images", []string{"Tags", "ID", "Size", "Created"}, []int{420, 130, 100, 130}, u.imageRows),
+				u.listPage(pageVolumes, "Volumes", []string{"Name", "Driver", "Mount point"}, []int{380, 100, 480}, u.volumeRows),
+				u.logsPage()),
+			u.footer()))
 	look.SetSidebar(w, sidebar, content, sidebarWidth)
 	u.app.OnThemeChange(u.onThemeChange)
-	u.app.Unwrap().AddFilter(swt.KeyDown, navKeys{u.hist})
+	back, fwd := navKeys(runtime.GOOS)
+	w.OnKey(back, u.hist.Back)
+	w.OnKey(fwd, u.hist.Forward)
 	u.react()
 	w.OnClose(func() bool { u.stop(); return true })
 	// A fixed 1360x820 overflows smaller screens (the 1280x1024 Linux stand), cutting the right edge.
 	wd, ht := 1360, 820
-	if a := w.Unwrap().GetDisplay().GetPrimaryMonitor().GetClientArea(); a.Width > 0 && a.Height > 0 {
-		wd, ht = min(wd, int(a.Width)), min(ht, int(a.Height))
+	if sw, sh := u.app.ScreenSize(); sw > 0 && sh > 0 {
+		wd, ht = min(wd, sw), min(ht, sh)
 	}
 	w.SetSize(wd, ht)
 	w.Show()
 }
 
-// label makes a styled label; the font may be nil for the system default.
-func (u *ui) label(p container, text string, s surface, i ink, f *swt.Font, opts ...gowt.Option) *gowt.Label {
-	l := p.Label(text, opts...)
-	u.style(&l.Unwrap().Control, s, i)
-	if f != nil {
-		l.Unwrap().SetFont(f)
+// textOf binds a label's text to f; DOCKERDESK_NOLABELS=1 leaves the text as created.
+func textOf(f func() string) gowt.Option {
+	if ab.noLabels {
+		return gowt.Init(func(gowt.Widget) {})
 	}
-	return l
+	return gowt.BindText(rx.Compute(f))
 }
 
-// panel makes a container painted with the surface colour.
-func (u *ui) panel(p container, s surface, l gowt.Layout, opts ...gowt.Option) *gowt.Panel {
-	c := p.Panel(opts...)
-	c.SetLayout(l)
-	u.style(&c.Unwrap().Control, s, inkNone)
-	return c
+// pagePanel is one page of the content area.
+func (u *ui) pagePanel(children ...gowt.Option) gowt.Option {
+	return gowt.VBox(append([]gowt.Option{gowt.Padding(gowt.Spacing.PageMargin), gowt.Gap(gowt.Spacing.MD), u.paint(surfContent, inkNone)}, children...)...)
+}
+
+func (u *ui) title(text string) gowt.Option {
+	return gowt.Label(text, u.paint(surfContent, inkText), u.fonts.title)
 }
 
 // search filters the containers from the toolbar search field and shows them.
@@ -222,100 +207,74 @@ func (u *ui) search(text string) {
 	}
 }
 
-func (u *ui) buildFooter(root *gowt.Panel) {
-	f := u.panel(root, surfFooter, gowt.Grid{Columns: 2, Margin: gowt.Spacing.SM, Spacing: gowt.Spacing.MD}, fillX)
-	footL := u.label(f, "Connecting...", surfFooter, inkText, u.fonts.small, fillX)
-	u.label(f, "Docker "+u.info.ServerVersion, surfFooter, inkBlue, u.fonts.small, alignEnd)
-	if ab.noLabels {
-		return
+func (u *ui) footer() gowt.Option {
+	return gowt.Grid(2, gowt.GrowX(), gowt.Padding(gowt.Spacing.SM), gowt.Gap(gowt.Spacing.MD), u.paint(surfFooter, inkNone),
+		gowt.Label("Connecting...", gowt.GrowX(), u.paint(surfFooter, inkText), u.fonts.small, textOf(func() string {
+			if s := u.status.Get(); s != "" {
+				return s
+			}
+			if e := u.pollErr.Get(); e != "" {
+				return "Engine not reachable: " + e
+			}
+			if u.engine.Get() == engineConnecting {
+				return "Connecting..."
+			}
+			x := u.use.Get()
+			msg := fmt.Sprintf("Containers: RAM %s   CPU %.2f%%", formatBytes(x.mem), x.cpu/float64(max(u.info.NCPU, 1)))
+			if f := u.failure.Get(); f != "" {
+				msg += "   |   last action failed: " + f
+			}
+			return msg
+		})),
+		gowt.Label("Docker "+u.info.ServerVersion, gowt.Place(gowt.AlignEnd, gowt.AlignStart), u.paint(surfFooter, inkBlue), u.fonts.small))
+}
+
+func (u *ui) containersPage() gowt.Option {
+	count := gowt.Init(func(gowt.Widget) {})
+	if !ab.noTree {
+		count = textOf(func() string { return fmt.Sprintf("Showing %d items", len(u.shown.Get())) })
 	}
-	footL.BindText(rx.Compute(func() string {
-		if s := u.status.Get(); s != "" {
-			return s
-		}
-		if e := u.pollErr.Get(); e != "" {
-			return "Engine not reachable: " + e
-		}
-		if u.engine.Get() == engineConnecting {
-			return "Connecting..."
-		}
-		x := u.use.Get()
-		msg := fmt.Sprintf("Containers: RAM %s   CPU %.2f%%", formatBytes(x.mem), x.cpu/float64(max(u.info.NCPU, 1)))
-		if f := u.failure.Get(); f != "" {
-			msg += "   |   last action failed: " + f
-		}
-		return msg
-	}))
+	return u.pagePanel(
+		u.title("Containers"),
+		u.stats(),
+		gowt.Button("Only show running containers", gowt.Check(), gowt.Bind(u.onlyRun)),
+		u.treeView(),
+		gowt.Canvas(u.paintChart, gowt.GrowX(), gowt.Size(0, 170), gowt.Ref(&u.chart), gowt.BindVisible(u.chartOn),
+			gowt.Init(func(c *gowt.CanvasView) { gowt.Watch(c, u.pal, func(palette) { c.Redraw() }) })),
+		gowt.Label("Showing 0 items", gowt.Place(gowt.AlignEnd, gowt.AlignStart), u.paint(surfContent, inkText), u.fonts.small, count))
 }
 
-func (u *ui) buildPages() {
-	for range 4 {
-		u.pageViews = append(u.pageViews, u.panel(u.pages, surfContent, gowt.Grid{Columns: 1, Margin: gowt.Spacing.PageMargin, Spacing: gowt.Spacing.MD}))
-	}
-	u.buildContainers(u.pageViews[pageContainers])
-	u.images = u.newListPage(u.pageViews[pageImages], "Images", []string{"Tags", "ID", "Size", "Created"}, []int{420, 130, 100, 130}, u.imageRows)
-	u.volumes = u.newListPage(u.pageViews[pageVolumes], "Volumes", []string{"Name", "Driver", "Mount point"}, []int{380, 100, 480}, u.volumeRows)
-	u.buildLogs(u.pageViews[pageLogs])
-	u.pages.ShowTop(u.pageViews[pageContainers])
-}
-
-func (u *ui) buildContainers(p *gowt.Panel) {
-	u.label(p, "Containers", surfContent, inkText, u.fonts.title)
-	u.buildStats(p)
-	bar := u.panel(p, surfContent, gowt.Row{Spacing: gowt.Spacing.LG, Center: true}, fillX)
-	only := bar.Button("Only show running containers", nil, gowt.Check())
-	only.BindChecked(u.onlyRun)
-	u.style(&only.Unwrap().Control, surfNone, inkNone) // native colours: the system theme draws the check box
-	u.buildTree(p)
-	u.chart = p.Canvas(u.paintChart, gowt.Cell(gowt.GridCell{Align: gowt.AlignFill, GrowX: true, Height: 170}))
-	u.showChart(os.Getenv("DOCKERDESK_CHARTS") == "1")
-	u.count = u.label(p, "Showing 0 items", surfContent, inkText, u.fonts.small, alignEnd)
-}
-
-// buildStats puts the usage on a grouped card; its panels and labels paint no background of their
+// stats puts the usage on a grouped card; its panels and labels paint no background of their
 // own, so they take the card colour.
-func (u *ui) buildStats(p *gowt.Panel) {
-	row := p.Section(fillX).Row().SetLayout(gowt.Grid{Columns: 3, Margin: gowt.Spacing.SM, Spacing: gowt.Spacing.XL})
-	card := gowt.Grid{Columns: 1, Spacing: gowt.Spacing.XS}
-	cpu := u.panel(row, surfNone, card, fillX)
-	u.label(cpu, "Container CPU usage", surfNone, inkText, u.fonts.small)
-	v := u.panel(cpu, surfNone, gowt.Grid{Columns: 2, Spacing: gowt.Spacing.SM})
-	cpuVal := u.label(v, "-", surfNone, inkGreen, u.fonts.big)
-	u.label(v, fmt.Sprintf("(%d CPUs available)", u.info.NCPU), surfNone, inkMuted, u.fonts.small)
-	mem := u.panel(row, surfNone, card, fillX)
-	u.label(mem, "Container memory usage", surfNone, inkText, u.fonts.small)
-	memVal := u.label(mem, "-", surfNone, inkGreen, u.fonts.big)
-	if !ab.noLabels {
-		cpuVal.BindText(rx.Compute(func() string {
-			if u.engine.Get() == engineConnecting {
-				return "-"
-			}
-			return fmt.Sprintf("%.2f%% / %d00%%", u.use.Get().cpu, u.info.NCPU)
-		}))
-		memVal.BindText(rx.Compute(func() string {
-			if u.engine.Get() == engineConnecting {
-				return "-"
-			}
-			return formatBytes(u.use.Get().mem) + " / " + formatBytes(u.info.MemTotal)
-		}))
-	}
-	u.chartLink = row.Link(`<a href="toggle">Show charts</a>`, func(string) { u.showChart(!u.chartShown) }, alignEnd)
-}
-
-// showChart hides the chart by excluding it from the grid, which the facade has no call for.
-func (u *ui) showChart(on bool) {
-	u.chartShown = on
-	c := u.chart.Unwrap()
-	c.GetLayoutData().(*swt.GridData).Exclude = !on
-	c.SetVisible(on)
-	text := "Show charts"
-	if on {
-		text = "Hide charts"
-	}
-	if u.chartLink != nil {
-		u.chartLink.SetText(`<a href="toggle">` + text + `</a>`)
-	}
-	u.pageViews[pageContainers].Unwrap().Layout()
+func (u *ui) stats() gowt.Option {
+	return gowt.Section(gowt.GrowX(),
+		gowt.Grid(3, gowt.Padding(gowt.Spacing.SM), gowt.Gap(gowt.Spacing.XL),
+			gowt.VBox(gowt.GrowX(), gowt.Gap(gowt.Spacing.XS),
+				gowt.Label("Container CPU usage", u.paint(surfNone, inkText), u.fonts.small),
+				gowt.Grid(2, gowt.Gap(gowt.Spacing.SM),
+					gowt.Label("-", u.paint(surfNone, inkGreen), u.fonts.big, textOf(func() string {
+						if u.engine.Get() == engineConnecting {
+							return "-"
+						}
+						return fmt.Sprintf("%.2f%% / %d00%%", u.use.Get().cpu, u.info.NCPU)
+					})),
+					gowt.Label(fmt.Sprintf("(%d CPUs available)", u.info.NCPU), u.paint(surfNone, inkMuted), u.fonts.small))),
+			gowt.VBox(gowt.GrowX(), gowt.Gap(gowt.Spacing.XS),
+				gowt.Label("Container memory usage", u.paint(surfNone, inkText), u.fonts.small),
+				gowt.Label("-", u.paint(surfNone, inkGreen), u.fonts.big, textOf(func() string {
+					if u.engine.Get() == engineConnecting {
+						return "-"
+					}
+					return formatBytes(u.use.Get().mem) + " / " + formatBytes(u.info.MemTotal)
+				}))),
+			gowt.Link("", gowt.Place(gowt.AlignEnd, gowt.AlignStart),
+				gowt.OnClick(func(string) { u.chartOn.Set(!u.chartOn.Peek()) }),
+				gowt.BindText(rx.Compute(func() string {
+					if u.chartOn.Get() {
+						return `<a href="toggle">Hide charts</a>`
+					}
+					return `<a href="toggle">Show charts</a>`
+				})))))
 }
 
 const (
@@ -324,12 +283,15 @@ const (
 	engineDown
 )
 
-// react starts what follows the polls and the user's input beyond the bound labels.
+// react starts what follows the polls, the history and the user's input beyond the bound widgets.
 func (u *ui) react() {
-	gowt.Bind(u.win, u.hist.cur, u.show)
-	if u.nav != nil && !ab.noLabels {
-		gowt.Bind(u.nav, u.engine, func(int) { u.nav.Redraw() })
-	}
+	gowt.Watch(u.win, u.page, func(p int) { u.win.SetTitle(navTitles[p]) })
+	gowt.Watch(u.win, u.hist.cur, func(p place) {
+		if p.page == pageLogs && p.logID != "" && p.logID != u.logID.Peek() {
+			u.logID.Set(p.logID)
+		}
+	})
+	rx.Effect(u.streamLogs)
 	rx.Effect(func() {
 		if e := u.pollErr.Get(); e != "" {
 			log.Printf("engine error: %v", e)
@@ -337,25 +299,16 @@ func (u *ui) react() {
 	})
 	// A new poll ends the footer message an action left there.
 	rx.Effect(func() { u.snap.Get(); u.status.Set("") })
-	rx.Effect(func() {
-		if s := u.snap.Get(); s == nil || s.err != nil {
+	gowt.Watch(u.chart, u.snap, func(s *snapshot) {
+		if s == nil || s.err != nil {
 			return
 		}
 		u.totalHist.push(u.use.Peek().cpu)
 		u.pushSelected()
 		u.redrawChart()
 	})
-	if ab.noTree {
-		return
-	}
-	visible := rx.ComputeFunc(func() []*Ctr { return filterContainers(u.ctrs.Get(), u.query.Get(), u.onlyRun.Get()) }, nil)
-	rows := rx.ComputeFunc(func() []treeRow { return buildRows(groupContainers(visible.Get()), time.Now()) }, nil)
-	rx.Effect(func() {
-		u.visible = visible.Get()
-		u.render(rows.Get())
-	})
-	if !ab.noLabels {
-		u.count.BindText(rx.Compute(func() string { return fmt.Sprintf("Showing %d items", len(rows.Get())) }))
+	if !ab.noTree {
+		gowt.Watch(u.tree, u.shown, u.render)
 	}
 }
 

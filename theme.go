@@ -74,52 +74,42 @@ func (p *palette) inkColor(i ink) gowt.RGB {
 	return p.text
 }
 
-// color returns a cached swt colour; the few distinct values live as long as the process.
-func (u *ui) color(c gowt.RGB) *swt.Color {
-	if sc, ok := u.colors[c]; ok {
-		return sc
-	}
-	sc := swt.NewColorRedGreenBlue(int32(c.R), int32(c.G), int32(c.B))
-	u.colors[c] = sc
-	return sc
-}
-
-// style paints a control now and again after every theme change.
-func (u *ui) style(c *swt.Control, s surface, i ink) {
-	apply := func() {
-		if s != surfNone {
-			c.SetBackgroundWithColor(u.color(u.pal.surfaceColor(s)))
-		}
-		if i != inkNone {
-			c.SetForeground(u.color(u.pal.inkColor(i)))
-		}
-	}
-	apply()
-	u.restyle = append(u.restyle, apply)
+// paint colours a widget from the palette, now and again after every theme change.
+func (u *ui) paint(s surface, i ink) gowt.Option {
+	return gowt.Init(func(w gowt.Widget) {
+		gowt.Watch(w, u.pal, func(p palette) {
+			if s != surfNone {
+				w.SetBackground(p.surfaceColor(s))
+			}
+			if i != inkNone {
+				w.SetForeground(p.inkColor(i))
+			}
+		})
+	})
 }
 
 func (u *ui) onThemeChange(dark bool) {
-	u.pal = paletteFor(dark)
-	for _, f := range u.restyle {
-		f()
-	}
-	u.loadNavIcons()
-	u.setNavImages()
-	if u.nav != nil {
-		u.nav.Redraw()
-	}
-	u.chart.Redraw()
+	p := paletteFor(dark)
+	u.pal.Set(p)
+	u.navIcons.Set(u.loadNavIcons(p))
 }
 
-type fontSet struct{ title, heading, big, small, bold *swt.Font }
+// fontSet holds the text styles as options; navHeading is the heading font for the painted sidebar.
+type fontSet struct {
+	title, heading, big, small gowt.Option
+	navHeading                 gowt.Font
+}
 
 // initFonts derives sizes from the system font of ref instead of naming a family, so each OS keeps its own.
-// The fonts live as long as the process, so they are never disposed.
 func (u *ui) initFonts(ref *swt.Control) {
 	fd := ref.GetFont().GetFontData()[0]
 	h := float64(fd.GetHeight())
-	mk := func(scale float64, w gowt.Weight) *swt.Font {
-		return swt.NewFontDeviceNameHeightWeight(ref.GetDisplay(), "", int32(h*scale+0.5), int32(w), false)
+	size := func(scale float64) int { return int(h*scale + 0.5) }
+	font := func(scale float64, w gowt.Weight) gowt.Font { return gowt.Font{Size: size(scale), Weight: w} }
+	mk := func(scale float64, w gowt.Weight) gowt.Option {
+		f := font(scale, w)
+		return gowt.Init(func(c gowt.Widget) { c.SetFont(f) })
 	}
-	u.fonts = fontSet{title: mk(1.15, gowt.Semibold), heading: mk(0.85, gowt.Semibold), big: mk(1.15, gowt.Medium), small: mk(0.85, gowt.Regular), bold: mk(1.0, gowt.Bold)}
+	u.fonts = fontSet{title: mk(1.15, gowt.Semibold), heading: mk(0.85, gowt.Semibold), big: mk(1.15, gowt.Medium), small: mk(0.85, gowt.Regular),
+		navHeading: font(0.85, gowt.Semibold)}
 }
