@@ -97,20 +97,19 @@ func (u *ui) onThemeChange(dark bool) {
 // fontSet holds the text styles as options; navHeading is the heading font for the painted sidebar.
 type fontSet struct {
 	title, heading, big, small gowt.Option
-	navHeading                 *swt.Font
+	navHeading                 gowt.Font
 }
 
 // initFonts derives sizes from the system font of ref instead of naming a family, so each OS keeps its own.
-// navHeading lives as long as the process, so it is never disposed.
 func (u *ui) initFonts(ref *swt.Control) {
 	fd := ref.GetFont().GetFontData()[0]
 	h := float64(fd.GetHeight())
 	size := func(scale float64) int { return int(h*scale + 0.5) }
+	font := func(scale float64, w gowt.Weight) gowt.Font { return gowt.Font{Size: size(scale), Weight: w} }
 	mk := func(scale float64, w gowt.Weight) gowt.Option {
-		f := gowt.Font{Size: size(scale), Weight: w}
+		f := font(scale, w)
 		return gowt.Init(func(c gowt.Widget) { c.SetFont(f) })
 	}
 	u.fonts = fontSet{title: mk(1.15, gowt.Semibold), heading: mk(0.85, gowt.Semibold), big: mk(1.15, gowt.Medium), small: mk(0.85, gowt.Regular),
-		// GC has no SetFont, so the painted sidebar draws its headings with an swt font.
-		navHeading: swt.NewFontDeviceNameHeightWeight(ref.GetDisplay(), "", int32(size(0.85)), int32(gowt.Semibold), false)}
+		navHeading: font(0.85, gowt.Semibold)}
 }

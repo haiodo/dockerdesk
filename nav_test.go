@@ -1,10 +1,6 @@
 package main
 
-import (
-	"testing"
-
-	"github.com/haiodo/gowt/swt"
-)
+import "testing"
 
 func TestNavHistory(t *testing.T) {
 	ctrs, imgs, logsA := place{page: pageContainers}, place{page: pageImages}, place{page: pageLogs, logID: "a"}
@@ -37,19 +33,13 @@ func TestNavHistory(t *testing.T) {
 	check("back past the cleared branch", ctrs, false, true)
 }
 
-func TestNavKey(t *testing.T) {
-	cases := []struct {
-		goos      string
-		mods, key int32
-		want      int
-	}{
-		{"darwin", swt.COMMAND, '[', -1}, {"darwin", swt.COMMAND, ']', 1}, {"darwin", swt.ALT, swt.ARROW_LEFT, 0},
-		{"darwin", swt.COMMAND | swt.SHIFT, '[', 0}, {"linux", swt.ALT, swt.ARROW_LEFT, -1}, {"windows", swt.ALT, swt.ARROW_RIGHT, 1},
-		{"linux", 0, swt.ARROW_LEFT, 0}, {"linux", swt.CTRL, '[', 0},
+func TestNavKeys(t *testing.T) {
+	cases := []struct{ goos, back, fwd string }{
+		{"darwin", "Cmd+[", "Cmd+]"}, {"linux", "Alt+Left", "Alt+Right"}, {"windows", "Alt+Left", "Alt+Right"},
 	}
 	for _, c := range cases {
-		if got := navKey(c.goos, c.mods, c.key); got != c.want {
-			t.Errorf("navKey(%s, %#x, %#x) = %d, want %d", c.goos, c.mods, c.key, got, c.want)
+		if b, f := navKeys(c.goos); b != c.back || f != c.fwd {
+			t.Errorf("navKeys(%s) = %q, %q, want %q, %q", c.goos, b, f, c.back, c.fwd)
 		}
 	}
 }

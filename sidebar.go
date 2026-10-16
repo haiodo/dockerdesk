@@ -1,12 +1,10 @@
 package main
 
 import (
-	"runtime"
 	"slices"
 
 	"github.com/haiodo/gowt"
 	"github.com/haiodo/gowt/rx"
-	"github.com/haiodo/gowt/swt"
 )
 
 var navTitles = []string{"Containers", "Images", "Volumes", "Logs"}
@@ -116,13 +114,13 @@ func (u *ui) sidebar(ref gowt.Option) gowt.Option {
 			top = gowt.Spacing.LG
 		}
 		sb = append(sb,
-			gowt.Label(sec.title, gowt.GrowX(), u.paint(surfNone, inkMuted), u.fonts.heading, indent(navIndent, top)),
+			gowt.Label(sec.title, gowt.GrowX(), u.paint(surfNone, inkMuted), u.fonts.heading, gowt.Indent(navIndent, top)),
 			u.navTable(sec.pages))
 	}
 	return gowt.VBox(append(sb, u.engineLine())...)
 }
 
-// navTable lists the pages of one sidebar section; selectNav marks the current one.
+// navTable lists the pages of one sidebar section and follows the current page.
 func (u *ui) navTable(pages []int) gowt.Option {
 	return gowt.Table(gowt.NoBorder(), gowt.GrowX(),
 		gowt.Init(func(t *gowt.TableView) {
@@ -142,27 +140,14 @@ func (u *ui) navTable(pages []int) gowt.Option {
 					t.RowAt(j).SetImage(0, icons[pg])
 				}
 			})
-			u.navTables = append(u.navTables, t)
+			gowt.Watch(t, u.page, func(p int) {
+				if j := slices.Index(pages, p); j >= 0 {
+					t.SetSelection(j)
+				} else {
+					t.SetSelection()
+				}
+			})
 		}))
-}
-
-// selectNav marks page p in the macOS source list.
-func (u *ui) selectNav(p int) {
-	for i, t := range u.navTables {
-		if j := slices.Index(navSections[i].pages, p); j >= 0 {
-			t.SetSelection(j)
-		} else {
-			t.SetSelection()
-		}
-	}
-}
-
-// indent moves a label right and down inside its grid cell, which no placement option does.
-func indent(x, y int) gowt.Option {
-	return gowt.Init(func(l *gowt.LabelView) {
-		gd := l.Unwrap().GetLayoutData().(*swt.GridData)
-		gd.HorizontalIndent, gd.VerticalIndent = int32(x), int32(y)
-	})
 }
 
 // navRow is a line of the painted sidebar: a section heading (page -1) or a page.
@@ -198,12 +183,11 @@ func (u *ui) paintNav(g *gowt.GC) {
 	cur := u.page.Peek()
 	for _, r := range navRows() {
 		if r.page < 0 {
-			font := g.Unwrap().GetFont()
-			g.Unwrap().SetFont(u.fonts.navHeading)
+			g.SetFont(u.fonts.navHeading)
 			g.SetColor(p.muted)
 			_, th := g.TextSize(r.title)
 			g.Text(r.title, navInset+12, r.y+(navHeadH-th)/2)
-			g.Unwrap().SetFont(font)
+			g.SetFont(gowt.Font{})
 			continue
 		}
 		rh := navRowH - 4
@@ -256,7 +240,7 @@ func (u *ui) onNavClick(m gowt.Mouse) {
 // engineLine shows the engine state at the bottom of the sidebar: a coloured dot and a word.
 func (u *ui) engineLine() gowt.Option {
 	return gowt.Grid(2, gowt.Padding(gowt.Spacing.SM), gowt.Gap(gowt.Spacing.SM), gowt.Grow(), gowt.Place(gowt.AlignFill, gowt.AlignEnd),
-		gowt.Label("", gowt.Place(gowt.AlignStart, gowt.AlignCenter), indent(navIndent-gowt.Spacing.SM, 0), gowt.Init(func(l *gowt.LabelView) {
+		gowt.Label("", gowt.Place(gowt.AlignStart, gowt.AlignCenter), gowt.Indent(navIndent-gowt.Spacing.SM, 0), gowt.Init(func(l *gowt.LabelView) {
 			l.SetImage(u.rowIcons["wait"])
 			if !ab.noLabels {
 				gowt.Watch(l, u.engine, func(e int) { l.SetImage(u.rowIcons[engineIcon(e)]) })
@@ -285,34 +269,10 @@ func engineText(e int) string {
 	return "Connecting..."
 }
 
-// navKeys moves through the history with Cmd+[ and Cmd+] on macOS, Alt+Left and Alt+Right elsewhere.
-type navKeys struct{ h *navHistory }
-
-func (k navKeys) HandleEvent(e *swt.Event) {
-	switch navKey(runtime.GOOS, e.StateMask&swt.MODIFIER_MASK, e.KeyCode) {
-	case -1:
-		k.h.Back()
-	case 1:
-		k.h.Forward()
-	default:
-		return
-	}
-	e.Doit = false
-}
-
-// navKey maps a key press to -1 for back, 1 for forward and 0 for any other key.
-func navKey(goos string, mods, key int32) int {
-	back, fwd, want := int32(swt.ARROW_LEFT), int32(swt.ARROW_RIGHT), int32(swt.ALT)
+// navKeys returns the back and forward keys: Cmd+[ and Cmd+] on macOS, Alt+Left and Alt+Right elsewhere.
+func navKeys(goos string) (back, forward string) {
 	if goos == "darwin" {
-		back, fwd, want = '[', ']', swt.COMMAND
+		return "Cmd+[", "Cmd+]"
 	}
-	switch {
-	case mods != want:
-		return 0
-	case key == back:
-		return -1
-	case key == fwd:
-		return 1
-	}
-	return 0
+	return "Alt+Left", "Alt+Right"
 }

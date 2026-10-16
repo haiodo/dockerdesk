@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/haiodo/gowt"
 	"github.com/haiodo/gowt/look"
 	"github.com/haiodo/gowt/rx"
-	"github.com/haiodo/gowt/swt"
 )
 
 const (
@@ -36,12 +36,11 @@ type ui struct {
 	rowIcons map[string]*gowt.Image
 	navIcons *rx.State[[]*gowt.Image] // tinted for the current palette
 
-	native    bool // macOS: native toolbar and glass sidebar
-	hist      *navHistory
-	page      *rx.Derived[int]  // the page of the current place
-	nav       *gowt.CanvasView  // painted sidebar of Linux and Windows
-	navTables []*gowt.TableView // macOS source list
-	chartOn   *rx.State[bool]
+	native  bool // macOS: native toolbar and glass sidebar
+	hist    *navHistory
+	page    *rx.Derived[int] // the page of the current place
+	nav     *gowt.CanvasView // painted sidebar of Linux and Windows
+	chartOn *rx.State[bool]
 
 	// The poller posts whole snapshots; the rest is derived from them and from the user's input.
 	snap    *rx.State[*snapshot] // nil until the first poll answers
@@ -136,8 +135,7 @@ func (u *ui) post(s snapshot, good *[]*Ctr) {
 	u.app.Async(func() {
 		t0 := time.Now()
 		u.snap.Set(&s)
-		rx.Flush()
-		u.app.Unwrap().RunDeferredLayouts() // BindText lays out on the next loop turn; count it here
+		u.app.Flush() // BindText lays out on the next loop turn; count it here
 		log.Printf("apply %s", time.Since(t0).Round(time.Microsecond))
 	})
 }
@@ -170,8 +168,9 @@ func (u *ui) build() {
 			u.footer()))
 	look.SetSidebar(w, sidebar, content, sidebarWidth)
 	u.app.OnThemeChange(u.onThemeChange)
-	// The facade binds keys only to menu items, and dockerdesk has no menu bar to hang Back and Forward on.
-	u.app.Unwrap().AddFilter(swt.KeyDown, navKeys{u.hist})
+	back, fwd := navKeys(runtime.GOOS)
+	w.OnKey(back, u.hist.Back)
+	w.OnKey(fwd, u.hist.Forward)
 	u.react()
 	w.OnClose(func() bool { u.stop(); return true })
 	// A fixed 1360x820 overflows smaller screens (the 1280x1024 Linux stand), cutting the right edge.
@@ -287,8 +286,6 @@ const (
 // react starts what follows the polls, the history and the user's input beyond the bound widgets.
 func (u *ui) react() {
 	gowt.Watch(u.win, u.page, func(p int) { u.win.SetTitle(navTitles[p]) })
-	// After look.SetSidebar: a table moved into the glass with a row selected reports that row as a new selection.
-	gowt.Watch(u.win, u.page, u.selectNav)
 	gowt.Watch(u.win, u.hist.cur, func(p place) {
 		if p.page == pageLogs && p.logID != "" && p.logID != u.logID.Peek() {
 			u.logID.Set(p.logID)
