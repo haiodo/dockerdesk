@@ -39,7 +39,7 @@ func main() {
 		u := &ui{app: app, eng: eng, info: info, ctx: ctx, stop: stop, poll: newPoller(eng), trace: *mem}
 		u.poll.trace = *mem
 		u.build()
-		u.flushLogs()
+		app.Every(logFlush, u.flushLogs)
 		if os.Getenv("DOCKERDESK_TRACE") == "1" && os.Getenv("DOCKERDESK_DEMO") == "1" {
 			// Opens the first demo container's log without a click, for timing runs.
 			if cs, _ := eng.Containers(ctx); len(cs) > 0 {

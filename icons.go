@@ -39,12 +39,13 @@ func (u *ui) loadRowIcons() {
 	}
 }
 
-// loadNavIcons tints the sidebar glyphs with the current text colour; called again on a theme change.
-func (u *ui) loadNavIcons() {
-	hex := fmt.Sprintf("#%02x%02x%02x", u.pal.text.R, u.pal.text.G, u.pal.text.B)
-	u.navIcons = u.navIcons[:0]
+// loadNavIcons tints the sidebar glyphs with the text colour of p; called again on a theme change.
+func (u *ui) loadNavIcons(p palette) []*gowt.Image {
+	hex := fmt.Sprintf("#%02x%02x%02x", p.text.R, p.text.G, p.text.B)
+	var icons []*gowt.Image
 	for _, shape := range navShapes {
 		data := []byte(fmt.Sprintf(navSVG, shape))
-		u.navIcons = append(u.navIcons, u.app.ImageFromProvider(svg.NewImageDataProvider(data, 18, 18, hex)))
+		icons = append(icons, u.app.ImageFromProvider(svg.NewImageDataProvider(data, 18, 18, hex)))
 	}
+	return icons
 }

@@ -18,7 +18,7 @@ func (u *ui) act(verb string) {
 	if !ok {
 		return
 	}
-	u.actOn(verb, targetsOf(u.visible, k), k.id == "")
+	u.actOn(verb, targetsOf(u.visible.Peek(), k), k.id == "")
 }
 
 // actOn confirms, then runs the engine calls off the UI thread. Everything but a start of one

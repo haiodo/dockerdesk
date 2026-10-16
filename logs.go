@@ -65,34 +65,27 @@ func shortStamp(line string) string {
 	return line
 }
 
-func (u *ui) buildLogs(p *gowt.Panel) {
-	u.label(p, "Logs", surfContent, inkText, u.fonts.title)
-	bar := u.panel(p, surfContent, gowt.Row{Spacing: gowt.Spacing.SM, Center: true}, fillX)
-	title := bar.Label("", gowt.InRow(gowt.RowCell{Width: 360}))
-	u.style(&title.Unwrap().Control, surfContent, inkText)
-	title.BindText(rx.Compute(func() string {
-		id := u.logID.Get()
-		if id == "" {
-			return "Select a container and use View logs"
-		}
-		for _, c := range u.ctrs.Get() {
-			if c.ID == id {
-				return "Logs: " + c.Name()
-			}
-		}
-		return "Logs: "
-	}))
-	u.label(bar, "Tail", surfContent, inkText, nil)
-	tail := bar.Combo(tailChoices, gowt.ReadOnly())
-	tail.Select(u.tail.Peek())
-	tail.OnSelect(u.tail.Set)
-	follow := bar.Button("Follow", nil, gowt.Check())
-	follow.BindChecked(u.follow)
-	u.style(&follow.Unwrap().Control, surfNone, inkNone) // native colours: the system theme draws the check box
-	u.logText = p.StyledText(gowt.Scrollbars(), fillBoth)
-	u.logText.SetEditable(false)
-	u.logText.SetWrap(false)
-	rx.Effect(u.streamLogs)
+func (u *ui) logsPage() gowt.Option {
+	return u.pagePanel(
+		u.title("Logs"),
+		gowt.HBox(gowt.GrowX(), u.paint(surfContent, inkNone),
+			gowt.Label("", gowt.Size(360, 0), gowt.Place(gowt.AlignStart, gowt.AlignCenter), u.paint(surfContent, inkText),
+				gowt.BindText(rx.Compute(func() string {
+					id := u.logID.Get()
+					if id == "" {
+						return "Select a container and use View logs"
+					}
+					for _, c := range u.ctrs.Get() {
+						if c.ID == id {
+							return "Logs: " + c.Name()
+						}
+					}
+					return "Logs: "
+				}))),
+			gowt.Label("Tail", u.paint(surfContent, inkText)),
+			gowt.Combo(tailChoices, gowt.ReadOnly(), gowt.Bind(u.tail)),
+			gowt.Button("Follow", gowt.Check(), gowt.Bind(u.follow))),
+		gowt.StyledText(gowt.Scrollbars(), gowt.ReadOnly(), gowt.Grow(), gowt.Ref(&u.logText)))
 }
 
 // showLogs opens the Logs page for the selected container and starts the stream.
@@ -112,7 +105,6 @@ func (u *ui) streamLogs() {
 		return
 	}
 	u.logText.SetText("")
-	u.logCount = 0
 	tail, _ := strconv.Atoi(tailChoices[max(tailIdx, 0)])
 	ctx, cancel := context.WithCancel(u.ctx)
 	rx.OnCleanup(cancel)
@@ -136,28 +128,20 @@ func (u *ui) flushLogs() {
 			u.appendLogs(lines)
 		}
 	}
-	u.app.After(logFlush, u.flushLogs)
 }
 
 func (u *ui) appendLogs(lines []string) {
-	t0, total := time.Now(), len(lines)
+	t0 := time.Now()
 	u.logText.Append(strings.Join(lines, "\n") + "\n")
 	t1 := time.Now()
-	u.logCount += total
-	t2 := t1
-	if excess := u.logCount - maxLogLines; excess > 0 {
-		// Cut the head in place so scroll position and selection survive.
-		st := u.logText.Unwrap()
-		st.ReplaceTextRange(0, st.GetOffsetAtLine(int32(excess)), "")
-		u.logCount = maxLogLines
-		t2 = time.Now()
-	}
-	t3 := time.Now()
+	// Cut the head in place so scroll position and selection survive; +1 for the empty line after the last "\n".
+	u.logText.TrimHead(maxLogLines + 1)
+	t2 := time.Now()
 	if u.follow.Peek() {
 		u.logText.SetTopLine(u.logText.Lines() - 1)
 	}
 	if traceLogs {
 		log.Printf("logs: append %d lines: Append=%v trim=%v SetTopLine=%v total=%v since-open=%v",
-			total, t1.Sub(t0), t2.Sub(t1), time.Since(t3), time.Since(t0), time.Since(u.logCur.start))
+			len(lines), t1.Sub(t0), t2.Sub(t1), time.Since(t2), time.Since(t0), time.Since(u.logCur.start))
 	}
 }

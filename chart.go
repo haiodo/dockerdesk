@@ -31,14 +31,14 @@ func niceMax(peak float64) float64 {
 }
 
 func (u *ui) redrawChart() {
-	if u.chartShown {
+	if u.chartOn.Peek() {
 		u.chart.Redraw()
 	}
 }
 
 // paintChart draws both series spread over the full width; the callback owns the whole canvas every time.
 func (u *ui) paintChart(g *gowt.GC) {
-	p := &u.pal
+	p := u.pal.Peek()
 	w, h := u.chart.Size()
 	const left, top, bottom, right = 46, 22, 8, 12
 	pw, ph := w-left-right, h-top-bottom

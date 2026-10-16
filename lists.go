@@ -10,33 +10,36 @@ import (
 )
 
 // listPage is a read-only table filled by load on a worker goroutine whenever its page is opened.
-type listPage struct {
-	table *gowt.Table
-	load  func(ctx context.Context) ([][]string, error)
+func (u *ui) listPage(page int, title string, cols []string, widths []int, load func(context.Context) ([][]string, error)) gowt.Option {
+	return u.pagePanel(
+		u.title(title),
+		gowt.Table(gowt.Grow(), gowt.Init(func(t *gowt.TableView) {
+			t.ShowHeader(true)
+			for i, c := range cols {
+				t.Column(c, widths[i])
+			}
+			gowt.Watch(t, u.page, func(p int) {
+				if p == page {
+					u.reload(t, load)
+				}
+			})
+		})))
 }
 
-func (u *ui) newListPage(p *gowt.Panel, title string, cols []string, widths []int, load func(context.Context) ([][]string, error)) *listPage {
-	u.label(p, title, surfContent, inkText, u.fonts.title)
-	t := p.Table(fillBoth)
-	t.ShowHeader(true)
-	for i, c := range cols {
-		t.Column(c, widths[i])
-	}
-	return &listPage{t, load}
-}
-
-func (u *ui) reload(lp *listPage) {
+func (u *ui) reload(t *gowt.TableView, load func(context.Context) ([][]string, error)) {
 	go func() {
-		rows, err := lp.load(u.ctx)
+		rows, err := load(u.ctx)
 		u.app.Async(func() {
 			if err != nil {
 				u.status.Set("Cannot read list: " + err.Error())
 				return
 			}
-			lp.table.Clear()
-			for _, r := range rows {
-				lp.table.Row(r...)
-			}
+			t.Batch(func() {
+				t.Clear()
+				for _, r := range rows {
+					t.Row(r...)
+				}
+			})
 		})
 	}()
 }

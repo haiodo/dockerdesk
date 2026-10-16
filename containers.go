@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/haiodo/gowt"
-	"github.com/haiodo/gowt/swt"
 )
 
 // rowKey is stored in the tree item data: a group has only group set, a container has id too.
@@ -41,31 +40,31 @@ var columns = [colCount]struct {
 	{"CPU (%)", 80, true}, {"Memory", 170, true}, {"Last started", 120, false}, {"Actions", 60, false}, {"", 40, false},
 }
 
-func (u *ui) buildTree(p *gowt.Panel) {
-	u.tree = p.Tree(fillBoth)
-	t := u.tree.Unwrap()
-	t.SetHeaderVisible(true)
-	for _, c := range columns {
-		col := swt.NewTreeColumn(t, swt.NONE)
-		col.SetText(c.title)
-		col.SetWidth(int32(c.width))
-		if c.right {
-			col.SetAlignment(swt.RIGHT)
-		}
-	}
-	u.tree.OnSelect(func(*gowt.Node) { u.selectionChanged() })
-	u.tree.OnActivate(func(n *gowt.Node) {
-		if keyOf(n).id != "" {
-			u.showLogs()
-		}
-	})
-	t.AddMouseListener(swt.MouseListenerMouseDownAdapter(u.onTreeClick))
-	u.menu = gowt.PopupMenu(u.tree)
-	u.menu.Item("Start", func() { u.act("start") })
-	u.menu.Item("Stop", func() { u.act("stop") })
-	u.menu.Item("Restart", func() { u.act("restart") })
-	u.menu.Separator()
-	u.menu.Item("View logs", u.showLogs)
+func (u *ui) treeView() gowt.Option {
+	return gowt.Tree(gowt.Grow(), gowt.Ref(&u.tree),
+		gowt.OnSelect(func(*gowt.Node) { u.selectionChanged() }),
+		gowt.OnActivate(func(n *gowt.Node) {
+			if keyOf(n).id != "" {
+				u.showLogs()
+			}
+		}),
+		gowt.Init(func(t *gowt.TreeView) {
+			t.ShowHeader(true)
+			for _, c := range columns {
+				var opts []gowt.Option
+				if c.right {
+					opts = append(opts, gowt.Right())
+				}
+				t.Column(c.title, c.width, opts...)
+			}
+			t.OnCellClick(u.onTreeClick)
+			u.menu = gowt.PopupMenu(t)
+			u.menu.Item("Start", func() { u.act("start") })
+			u.menu.Item("Stop", func() { u.act("stop") })
+			u.menu.Item("Restart", func() { u.act("restart") })
+			u.menu.Separator()
+			u.menu.Item("View logs", u.showLogs)
+		}))
 }
 
 func keyOf(n *gowt.Node) rowKey {
@@ -93,34 +92,23 @@ func targetsOf(visible []*Ctr, k rowKey) []*Ctr {
 	return out
 }
 
-// inCell reports whether the click lies inside the bounds the tree reports for that column of the item.
-func inCell(it *swt.TreeItem, col int, e *swt.MouseEvent) bool {
-	b := it.GetBoundsIndex(int32(col))
-	return b != nil && b.Contains(e.X, e.Y)
-}
-
 // onTreeClick handles the two icon columns. Only a plain left click counts, and each icon has a
 // column of its own, so no offsets inside a cell are involved.
-func (u *ui) onTreeClick(e *swt.MouseEvent) {
-	if e.Button != 1 || e.Count != 1 {
+func (u *ui) onTreeClick(c gowt.TreeClick) {
+	if c.Button != 1 || c.Count != 1 || c.Node == nil || (c.Col != colAction && c.Col != colMore) {
 		return
 	}
-	t := u.tree.Unwrap()
-	it := t.GetItemPoint(swt.NewPoint(e.X, e.Y))
-	if it == nil {
+	k, ok := c.Node.Data().(rowKey)
+	if !ok {
 		return
 	}
-	k, ok := it.GetData().(rowKey)
-	if !ok || !(inCell(it, colAction, e) || inCell(it, colMore, e)) {
-		return
-	}
-	t.SetSelection(it)
+	u.tree.Select(c.Node)
 	u.selectionChanged()
-	if inCell(it, colMore, e) {
+	if c.Col == colMore {
 		u.menu.Show()
 		return
 	}
-	targets := targetsOf(u.visible, k)
+	targets := targetsOf(u.visible.Peek(), k)
 	verb := "start"
 	if anyRunning(targets) {
 		verb = "stop"
@@ -234,17 +222,17 @@ func (u *ui) render(rows []treeRow) {
 
 func (u *ui) updateRows(rows []treeRow) {
 	for i := range rows {
-		r, old, it := &rows[i], &u.rows[i], u.items[i]
+		r, old, n := &rows[i], &u.rows[i], u.items[i]
 		for c := range r.cells {
 			if r.cells[c] != old.cells[c] {
-				it.SetTextIndexString(int32(c), r.cells[c])
+				n.SetTextAt(c, r.cells[c])
 			}
 		}
 		if r.status != old.status {
-			it.SetImageIndexImage(colName, u.rowIcons[r.status].Unwrap())
+			n.SetImageAt(colName, u.rowIcons[r.status])
 		}
 		if r.action != old.action {
-			it.SetImageIndexImage(colAction, u.rowIcons[r.action].Unwrap())
+			n.SetImageAt(colAction, u.rowIcons[r.action])
 		}
 	}
 	u.rows = rows
@@ -253,52 +241,49 @@ func (u *ui) updateRows(rows []treeRow) {
 func (u *ui) rebuild(rows []treeRow) {
 	selected, hadSel := u.selectedKey()
 	expanded := map[string]bool{}
-	for _, it := range u.items {
-		if k, _ := it.GetData().(rowKey); k.id == "" && it.GetExpanded() {
+	for _, n := range u.items {
+		if k := keyOf(n); k.id == "" && n.Expanded() {
 			expanded[k.group] = true
 		}
 	}
-	t := u.tree.Unwrap()
-	t.SetRedraw(false)
-	u.tree.Clear()
-	u.items = u.items[:0]
-	var parent *gowt.Node
-	var reselect *swt.TreeItem
-	for _, r := range rows {
-		var n *gowt.Node
-		if r.depth == 0 {
-			n = u.tree.Node("")
-			parent = n
-		} else {
-			n = parent.Node("")
+	u.tree.Batch(func() {
+		u.tree.Clear()
+		u.items = u.items[:0]
+		var parent, reselect *gowt.Node
+		for _, r := range rows {
+			var n *gowt.Node
+			if r.depth == 0 {
+				n = u.tree.Node("")
+				parent = n
+			} else {
+				n = parent.Node("")
+			}
+			n.SetData(r.key)
+			u.fillNode(n, r)
+			u.items = append(u.items, n)
+			if hadSel && r.key == selected {
+				reselect = n
+			}
 		}
-		it := n.Unwrap()
-		it.SetData(r.key)
-		u.fillItem(it, r)
-		u.items = append(u.items, it)
-		if hadSel && r.key == selected {
-			reselect = it
+		// New groups start expanded; a group the user collapsed stays collapsed.
+		for i, r := range rows {
+			if r.key.id == "" && (expanded[r.key.group] || !u.seen[r.key.group]) {
+				u.items[i].SetExpanded(true)
+				u.seen[r.key.group] = true
+			}
 		}
-	}
-	// New groups start expanded; a group the user collapsed stays collapsed.
-	for i, r := range rows {
-		if r.key.id == "" && (expanded[r.key.group] || !u.seen[r.key.group]) {
-			u.items[i].SetExpanded(true)
-			u.seen[r.key.group] = true
+		if reselect != nil {
+			u.tree.Select(reselect)
 		}
-	}
-	if reselect != nil {
-		t.SetSelection(reselect)
-	}
-	t.SetRedraw(true)
+	})
 	u.rows = rows
 }
 
-func (u *ui) fillItem(it *swt.TreeItem, r treeRow) {
+func (u *ui) fillNode(n *gowt.Node, r treeRow) {
 	for c, s := range r.cells {
-		it.SetTextIndexString(int32(c), s)
+		n.SetTextAt(c, s)
 	}
-	it.SetImageIndexImage(colName, u.rowIcons[r.status].Unwrap())
-	it.SetImageIndexImage(colAction, u.rowIcons[r.action].Unwrap())
-	it.SetImageIndexImage(colMore, u.rowIcons["more"].Unwrap())
+	n.SetImageAt(colName, u.rowIcons[r.status])
+	n.SetImageAt(colAction, u.rowIcons[r.action])
+	n.SetImageAt(colMore, u.rowIcons["more"])
 }
